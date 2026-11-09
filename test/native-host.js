@@ -10,13 +10,14 @@ import * as project from '../mods/sulan/context.js'
 import * as llm from '../mods/sulan/llm.js'
 import * as demo from '../mods/sulan/demo.js'
 import * as brief from '../mods/sulan/brief.js'
+import * as modelSettings from '../mods/sulan/model-settings.js'
 
 export async function createHost(options = {}) {
   let source = await readFile(new URL('../mods/sulan/main.js', import.meta.url), 'utf8')
   source = source.replace(/^import[\s\S]*?from ['"][^'"]+['"]\n/gm, '')
     .replace('export default class Sulan', 'globalThis.Mod = class Sulan')
   const metrics = { elements: 0, exec: 0, hc: 0, sharedWrites: 0 }
-  const storage = new Map()
+  const storage = options.storage ?? new Map()
   const element = (kind = 'div') => {
     metrics.elements++
     const node = { kind, nodes: [], handlers: {}, styles: {} }
@@ -32,7 +33,10 @@ export async function createHost(options = {}) {
     return proxy
   }
   const focus = { focus() {}, is_focused: () => false }
-  const input = { text: '', callbacks: {}, on(event, callback) { this.callbacks[event] = callback }, value() { return this.text }, set_value(value) { this.text = value }, focus() {}, release() {} }
+  const textState = (options = {}) => ({ text: options.value || '', callbacks: {}, masked: false,
+    on(event, callback) { this.callbacks[event] = callback }, value() { return this.text },
+    set_value(value) { this.text = value }, set_masked(value) { this.masked = value }, focus() {}, release() {} })
+  const input = textState()
   const timers = []
   const commands = []
   const cx = { notify() {}, stop_propagation() {}, write_to_clipboard() {}, focus_handle: () => focus,
@@ -40,16 +44,19 @@ export async function createHost(options = {}) {
     spawn(callback) { const task = callback(cx); task?.catch?.(error => { commands.push({ error }) }); return task },
   }
   const context = {
-    ...summary, ...diagram, ...text, ...chat, ...project, ...llm, ...demo, ...brief,
+    ...summary, ...diagram, ...text, ...chat, ...project, ...llm, ...demo, ...brief, ...modelSettings,
     completeModel: options.completeModel || llm.completeModel,
     View: class {}, div: () => element(), svg: () => element('svg'), image: () => element('image'),
     h_flex: () => element('row'), v_flex: () => element('column'),
-    InputState: { new: () => input }, Input: { new: () => element('input') },
+    InputState: { new: textState }, Input: { new: () => element('input') },
     TextView: { markdown: (id, markdown) => { const el = element('markdown'); el.id = id; el.markdown = markdown; return el } },
     Button: { new: id => { const el = element('button'); el.id = id; return el } },
     Scrollbar: { vertical: () => element('scrollbar') },
     TextareaState: { new: () => input }, Textarea: { new: () => element('textarea') },
-    localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
+    localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => {
+      if (options.failWrites) throw new Error('Storage unavailable')
+      storage.set(key, value)
+    } },
     theme: () => new Proxy({}, { get: () => '#789abc' }), settings: () => ({ zoom: 1, font_family: 'JetBrains Mono' }),
     spaces: () => options.spaces ?? [], panes: () => options.panes ?? [], focused: () => options.focused ?? null,
     agents: () => options.agents ?? [], terminals: () => options.terminals ?? [],
@@ -62,7 +69,7 @@ export async function createHost(options = {}) {
     console, Date, Map, Set, JSON,
   }
   const sandbox = vm.createContext(context)
-  for (const path of ['view.js', 'workspace.js']) {
+  for (const path of ['view.js', 'settings-view.js', 'workspace.js']) {
     const helper = (await readFile(new URL(`../mods/sulan/${path}`, import.meta.url), 'utf8'))
       .replace(/^import[\s\S]*?from ['"][^'"]+['"]\n/gm, '').replace(/export function /g, 'function ')
     vm.runInContext(helper, sandbox)
@@ -70,5 +77,5 @@ export async function createHost(options = {}) {
   vm.runInContext(source, sandbox)
   const mod = new context.Mod()
   mod.init({ mode: 'demo', ...options.props }, cx)
-  return { mod, cx, metrics, timers, input, commands }
+  return { mod, cx, metrics, timers, input, commands, storage }
 }

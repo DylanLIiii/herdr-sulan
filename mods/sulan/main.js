@@ -1,14 +1,16 @@
 // Sulan is a focused native sidebar. Workspace tab-bar adaptation lives in
 // workspace.js (Herdr App, Apache-2.0; see vendor/LICENSE.herdr-app).
 import { View, div, svg } from 'gpui-kit'
-import { h_flex, v_flex, TextareaState } from 'gpui-base'
+import { h_flex, v_flex, TextareaState, InputState } from 'gpui-base'
 import { spaces, panes, focused, agents, terminals, hc, theme, layout, props, nextCommand } from 'herdr'
 import { parseSummary } from './summary.js'
 import { prepareBrief } from './brief.js'
 import { activeProject, gatherProjectSnapshot, buildInstantSummary } from './context.js'
 import { MAX_QUESTION, MAX_ANSWER, MAX_TURNS, cleanTurns, replyFields, splitReply,
   summarySystemPrompt, summaryUserPrompt, sideChatPrompt } from './chat.js'
-import { completeModel, DEFAULT_ENDPOINT, DEFAULT_MODEL } from './llm.js'
+import { completeModel } from './llm.js'
+import { resolveModelSettings, validateModelSettings } from './model-settings.js'
+import { modelSettingsView } from './settings-view.js'
 import { DEMO_PROJECTS } from './demo.js'
 import { action, summaryView, chatView } from './view.js'
 import { findNode, renderWorkspaceTabs } from './workspace.js'
@@ -18,7 +20,7 @@ function load(key) {
   try { return JSON.parse(localStorage.getItem(PREFIX + key) || 'null') } catch { return null }
 }
 function save(key, value) {
-  try { localStorage.setItem(PREFIX + key, JSON.stringify(value)) } catch {}
+  try { localStorage.setItem(PREFIX + key, JSON.stringify(value)); return true } catch { return false }
 }
 const clock = at => {
   if (!at) return '尚未更新'
@@ -30,9 +32,6 @@ export default class Sulan extends View {
   init(initialProps, cx) {
     const p = initialProps ?? props() ?? {}
     this.role = p.role || 'sidebar'
-    this.endpoint = p.endpoint || DEFAULT_ENDPOINT
-    this.apiKey = typeof p.apiKey === 'string' ? p.apiKey : 'magpie'
-    this.summaryModel = p.summaryModel || DEFAULT_MODEL
     this.mode = p.mode === 'demo' ? 'demo' : 'live'
     this.width = 396
     this.tab = 'summary'
@@ -47,7 +46,12 @@ export default class Sulan extends View {
     this.detailsOpen = false
     this.menuOpen = false
     this.historyOpen = false
-    this.settingsOpen = false
+    this.page = 'content'
+    this.settingsInputs = null
+    this.settingsPicker = null
+    this.settingsError = ''
+    this.settingsNotice = ''
+    this.settingsNoticeVersion = 0
     this.loadingContext = false
     this.summarizing = false
     this.queuedAi = false
@@ -67,8 +71,7 @@ export default class Sulan extends View {
     this.spacePanels = load('space.panels') || {}
     this.pressedTab = null
     const preferences = load('prefs') || {}
-    this.chatModel = preferences.chatModel || DEFAULT_MODEL
-    this.chatEffort = preferences.chatEffort || 'medium'
+    Object.assign(this, resolveModelSettings(p, preferences))
     this.focus = cx.focus_handle()
     if (this.role !== 'tabs') {
       this.input = TextareaState.new({ placeholder: '问一个关于当前项目的问题…', rows: 2 })
@@ -103,6 +106,7 @@ export default class Sulan extends View {
         else if (command === 'demo') this.switchMode(this.mode === 'demo' ? 'live' : 'demo', cx)
         else if (command === 'chat') this.selectTab('chat', cx)
         else if (command === 'summary') this.selectTab('summary', cx)
+        else if (command === 'settings') this.openSettings(cx)
         cx.notify()
       }
     })
@@ -145,7 +149,45 @@ export default class Sulan extends View {
       turns: this.turns, draft: this.draft })
   }
   savePanelPrefs() { save('space.panels', this.spacePanels) }
-  persistPrefs() { save('prefs', { chatModel: this.chatModel, chatEffort: this.chatEffort }) }
+  modelConfiguration() {
+    return { summaryModel: this.summaryModel, chatModel: this.chatModel, chatEffort: this.chatEffort,
+      endpoint: this.endpoint, apiKey: this.apiKey }
+  }
+  persistPrefs() { return save('prefs', this.modelConfiguration()) }
+  openSettings(cx) {
+    if (this.role === 'tabs' || this.page === 'settings') return
+    if (!this.settingsInputs) {
+      this.settingsInputs = {}
+      for (const key of ['summaryModel', 'chatModel', 'endpoint', 'apiKey']) {
+        const state = InputState.new({ placeholder: key === 'endpoint' ? 'https://gateway/v1/messages' : key === 'apiKey' ? '可留空' : '模型名称或完整路由' })
+        state.on('change', (_event, cx) => { if (this.settingsError) { this.settingsError = ''; cx.notify() } })
+        this.settingsInputs[key] = state
+      }
+      this.settingsInputs.apiKey.set_masked(true)
+    }
+    for (const [key, state] of Object.entries(this.settingsInputs)) state.set_value(this[key])
+    this.settingsEffort = this.chatEffort
+    this.settingsPicker = null; this.settingsError = ''; this.menuOpen = false
+    this.page = 'settings'; this.focus.focus(); cx.notify()
+  }
+  closeSettings(cx) {
+    this.page = 'content'; this.settingsPicker = null; this.settingsError = ''
+    this.typing = false; this.focus.focus(); cx.notify()
+  }
+  saveSettings(cx) {
+    let config
+    try {
+      const values = Object.fromEntries(Object.entries(this.settingsInputs).map(([key, input]) => [key, input.value()]))
+      config = validateModelSettings({ ...values, chatEffort: this.settingsEffort })
+    } catch (error) { this.settingsError = error.message; cx.notify(); return false }
+    if (!save('prefs', config)) { this.settingsError = '无法保存到 Herdr 本地配置，请稍后重试。'; cx.notify(); return false }
+    Object.assign(this, config)
+    this.settingsNotice = '模型设置已保存，下一次请求生效。'
+    const version = ++this.settingsNoticeVersion
+    this.closeSettings(cx)
+    cx.timer.after(5000, cx => { if (!this.closed && version === this.settingsNoticeVersion) { this.settingsNotice = ''; cx.notify() } })
+    return true
+  }
   setSummary(text, source = 'instant', at = Date.now()) {
     this.summary = String(text || '').trim()
     this.brief = prepareBrief(parseSummary(this.summary))
@@ -170,6 +212,7 @@ export default class Sulan extends View {
     const generation = ++this.generation, key = this.projectKey
     const previousSummary = rebuild ? '' : this.summary
     const displayedSummary = this.summary, previousNote = this.note
+    const modelConfig = { endpoint: this.endpoint, apiKey: this.apiKey, model: this.summaryModel }
     this.loadingContext = true; this.paused = false; this.isError = false
     if (!silent) this.note = ''
     if (!silent) cx.notify()
@@ -190,7 +233,7 @@ export default class Sulan extends View {
         if (!this.summary || (this.summarySource === 'instant' && changed)) this.setSummary(buildInstantSummary(snapshot), 'instant')
         if (forceAi) {
           this.summarizing = true; cx.notify()
-          const reply = await completeModel({ endpoint: this.endpoint, apiKey: this.apiKey, model: this.summaryModel,
+          const reply = await completeModel({ ...modelConfig,
             system: summarySystemPrompt(), prompt: summaryUserPrompt({ previousSummary, contextText: snapshot.contextText }), maxTokens: 2000 })
           if (this.closed || generation !== this.generation || key !== this.projectKey) return
           const answer = splitReply(reply).answer.trim()
@@ -233,6 +276,7 @@ export default class Sulan extends View {
     const turn = this.turns.at(-1)
     if (this.chatRunning || !turn || turn.answer !== null) return
     const epoch = ++this.chatEpoch, key = this.projectKey
+    const modelConfig = { endpoint: this.endpoint, apiKey: this.apiKey, model: this.chatModel, effort: this.chatEffort }
     this.chatRunning = true; this.chatError = false; this.chatStatus = ''
     const current = () => !this.closed && epoch === this.chatEpoch && key === this.projectKey
     cx.timer.after(60000, cx => {
@@ -248,7 +292,7 @@ export default class Sulan extends View {
         else {
           const snapshot = this.snapshot && Date.now() - this.snapshot.capturedAt < 30000 ? this.snapshot : await this.contextRequest()
           if (!current()) return
-          reply = await completeModel({ endpoint: this.endpoint, apiKey: this.apiKey, model: this.chatModel, effort: this.chatEffort,
+          reply = await completeModel({ ...modelConfig,
             system: '你是项目侧聊助手。先用一句话回答，再用简短 Markdown 解释；普通正文不要全加粗。不执行工具。资料不足时直说，不编造进展或需要用户决定的问题。',
             prompt: sideChatPrompt(this.turns, this.summary, snapshot?.contextText || ''), maxTokens: 2500 })
         }
@@ -280,6 +324,10 @@ export default class Sulan extends View {
     if (text) { cx.write_to_clipboard(text); this.chatStatus = '已复制回答。'; this.chatError = false; cx.notify() }
   }
   handleKey(event, cx) {
+    if (this.page === 'settings') {
+      if (event.key === 'escape') { this.closeSettings(cx); cx.stop_propagation() }
+      return
+    }
     // Textarea focus notifications may arrive after the first key. Never let
     // unmodified chat typing bubble into global r/b/d/1/2 sidebar shortcuts.
     if (this.tab === 'chat') {
@@ -303,12 +351,14 @@ export default class Sulan extends View {
   render(cx) {
     const t = theme()
     if (this.role === 'tabs') return renderWorkspaceTabs(this, t)
+    if (this.page === 'settings') return modelSettingsView(this, t)
     const header = h_flex().h(45).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
       .child(svg('mods/sulan/sulan.svg').size(15).text_color(t.accent))
       .child(div().text_size(13).font_semibold().child(this.project?.name || '项目速览'))
       .child(div().flex_1())
       .when(this.mode === 'demo', el => el.child(div().text_size(11).text_color(t.working).child('演示')))
       .child(action('sulan-update', this.busy() ? '整理中…' : '更新', t, cx => this.refresh(cx, { forceAi: true }), { disabled: this.busy() }))
+      .child(action('sulan-settings', '设置', t, cx => this.openSettings(cx)))
       .child(action('sulan-menu', '更多', t, cx => { this.menuOpen = !this.menuOpen; cx.notify() }, { active: this.menuOpen }))
     const navigation = h_flex().h(40).flex_none().px(14).gap(4).items_center()
       .child(action('sulan-tab-summary', '速览', t, cx => this.selectTab('summary', cx), { active: this.tab === 'summary' }))
@@ -319,6 +369,7 @@ export default class Sulan extends View {
       .bg(t.background).border_1().border_color(t.border).text_color(t.foreground).font_normal().text_size(13)
       .track_focus(this.focus).on_key_down((event, cx) => this.handleKey(event, cx))
       .child(header).child(navigation)
+    if (this.settingsNotice) root.child(div().flex_none().px(18).py(6).text_size(12).text_color(t.done).child(this.settingsNotice))
     if (this.menuOpen) root.child(h_flex().px(14).pb(8).gap(6).flex_none()
       .child(action('sulan-rebuild', '重新整理', t, cx => { this.menuOpen = false; this.rebuild(cx) }, { disabled: this.busy() }))
       .child(action('sulan-demo', this.mode === 'demo' ? '查看实时项目' : '预览示例', t, cx => {

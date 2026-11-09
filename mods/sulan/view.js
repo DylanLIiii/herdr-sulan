@@ -2,7 +2,7 @@
 // TextView per document instead of a native element for every word and line.
 import { div } from 'gpui-kit'
 import { h_flex, v_flex, TextView, Textarea, Button, Scrollbar } from 'gpui-base'
-import { DEFAULT_MODELS, EFFORT_CHOICES, SUGGESTIONS, turnReply } from './chat.js'
+import { SUGGESTIONS, turnReply } from './chat.js'
 
 export function action(id, title, t, onClick, { active = false, disabled = false, primary = false } = {}) {
   return Button.new(id).accessibility_label(title).disabled(disabled).px(10).h(30).rounded(6)
@@ -96,24 +96,11 @@ export function chatView(view, t) {
       .child(div().text_size(11).text_color(t.muted).child('Ctrl / ⌘ + Enter 发送'))
       .child(action('chat-send', view.chatRunning ? '回答中…' : '发送', t, cx => view.submitChat(cx), { primary: true, disabled: view.chatRunning || !view.draft.trim() })))
   composer.child(input)
-  const modelName = DEFAULT_MODELS.find(m => m.value === view.chatModel)?.label || view.chatModel
   composer.child(h_flex().items_center().gap(5)
-    .child(action('chat-settings', '模型设置', t, cx => { view.settingsOpen = !view.settingsOpen; cx.notify() }, { active: view.settingsOpen }))
+    .child(action('chat-settings', '模型设置', t, cx => view.openSettings(cx)))
     .child(div().flex_1())
     .when(Boolean(view.turns.length), el => el.child(action('chat-copy', '复制', t, cx => view.copyLastAnswer(cx), { disabled: !view.turns.some(turn => turn.answer) }))
       .child(action('chat-clear', view.confirmClear ? '确认清空' : '清空', t, cx => view.clearChat(cx))))
     .when(view.confirmClear, el => el.child(action('chat-clear-cancel', '取消', t, cx => { view.confirmClear = false; cx.notify() }))))
-  if (view.settingsOpen) {
-    const settings = v_flex().gap(5).pt(5)
-    settings.child(div().text_size(12).font_medium().child(`回答模型 · ${modelName}`))
-    for (const [index, model] of DEFAULT_MODELS.entries()) settings.child(action(`chat-model-${index}`, model.label, t, cx => {
-      view.chatModel = model.value; view.persistPrefs(); cx.notify()
-    }, { active: view.chatModel === model.value, disabled: view.chatRunning }))
-    settings.child(div().pt(6).text_size(12).font_medium().child('思考深度'))
-      .child(h_flex().gap(3).flex_wrap().children(EFFORT_CHOICES.map(effort => action(`chat-effort-${effort.value}`, effort.label, t, cx => {
-        view.chatEffort = effort.value; view.persistPrefs(); cx.notify()
-      }, { active: effort.value === view.chatEffort, disabled: view.chatRunning }))))
-    composer.child(div().h(180).relative().child(v_flex().id('chat-settings-scroll').absolute().inset_0().overflow_y_scroll().child(settings)))
-  }
   return root.child(composer)
 }

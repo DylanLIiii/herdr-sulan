@@ -10,7 +10,9 @@ The standard workspace keeps its terminals, Files and Changes. The Sulan toggle 
 
 The brief leads with a clear 18px conclusion, followed by a highlighted attention region when there is evidence of a decision or problem. Native `TextView.markdown` renders current progress, key conclusions and the next step in regular 13px text with 21px leading. Bold phrases and inline code carry emphasis. Background and the full older summary are disclosed only on request. There is no terminal statistics page or progress percentage.
 
-The conversation shows the latest question and a Markdown answer, with previous turns collapsed by default. A multiline composer stays outside the transcript's scroll region at the bottom. Model and effort controls are tucked into settings; copy, retry and clear remain available. Thinking is collapsed. A long answer must not push the input out of view.
+The conversation shows the latest question and a Markdown answer, with previous turns collapsed by default. A multiline composer stays outside the transcript's scroll region at the bottom. Copy, retry and clear remain available. Thinking is collapsed. A long answer must not push the input out of view.
+
+The header **设置** button and the conversation's **模型设置** button open one dedicated full-height settings page. Sulan's summary model and Side Chat's model have separate editable fields and optional common-model choices. A shared service section contains the full endpoint URL and masked API key; a fixed footer has Cancel and Save and return. It is a subpage, not a third main tab.
 
 Use Herdr theme tokens, flat reading sections and restrained borders. Avoid arbitrary rainbow headings, per-line native text elements and nested message cards.
 
@@ -21,6 +23,7 @@ Use Herdr theme tokens, flat reading sections and restrained borders. Avoid arbi
 - Click Update to synthesize with the configured model. Rebuild is in More and leaves the visible summary in place until a replacement succeeds. Background collection every 10 seconds does not call the model.
 - `main.js` owns state and request generation guards. Switching tabs changes only the active surface. `view.js` builds only that surface; no hidden summary, diagram, transcript or terminal panel is materialized.
 - `brief.js` prepares Markdown hierarchy once when the summary changes. The old summary parser remains compatible with existing stored six-section summaries.
+- Settings are validated and saved atomically to the current Mod copy's preferences. Saved values override layout defaults; old chat-only preferences retain their model while the summary uses its installation default. Saving sends no request and affects the next request only; active requests retain a captured configuration. Cancel/Back discard uncommitted settings without clearing the conversation draft.
 - Each surface has its own stable scroll id. The multiline draft lives in retained `TextareaState`, survives tab switches, and submits with Ctrl/Command+Enter or Send. Ordinary typing only invalidates the outer sidebar when the Send button changes enabled state.
 - Space switches invalidate late context/model replies, clear transient UI state and restore that Space's summary/chat. localStorage belongs to the particular Mod copy. Request deadlines release loading state and ignore late replies; native fetch itself cannot be cancelled.
 
@@ -28,13 +31,14 @@ Use Herdr theme tokens, flat reading sections and restrained borders. Avoid arbi
 
 - `layouts/sulan.json` is a personal adaptation of Herdr's default workspace with a `panel-body` Sulan child.
 - `main.js` defaults to sidebar mode. The same Mod with `role: "tabs"` delegates the workspace tab bar to `workspace.js`, adapted under Herdr's Apache-2.0 license.
-- `view.js` uses GPUI `Button`, `TextView`, `Textarea` and a scroll area with an adjacent `Scrollbar`. All callbacks use their own `cx`; retained text state is created in init.
+- `view.js` uses GPUI `Button`, `TextView`, `Textarea` and a scroll area with an adjacent `Scrollbar`. All callbacks use their own `cx`; retained text state is created in init or an event.
+- `settings-view.js` renders the settings subpage; `model-settings.js` resolves defaults, migrates prior preferences and validates model/service fields. The masked native `InputState` handles are created lazily in the opening event and are not recreated during render.
 - `chat.js` handles prompts and separates returned Thinking from final answers; `llm.js` supports Anthropic/OpenAI-compatible endpoints. Default: `http://127.0.0.1:3425/v1/messages`, `auto/deepseek-v4.1-flash`. Model requests transmit the selected context to that endpoint.
 - `demo.js` contains synthetic concise content. Do not publish captured real terminal transcripts as preview data.
 - `scripts/install-layout.js` copies every runtime module and license, refuses existing names and rewrites asset paths for custom names.
 
 ## Verification
 
-Run `npm run check`, `npm test` and `herdr-app check mods/sulan`. Use an isolated home/core/display for native visual checks. Check summary and chat at 396px and 300px, long answers, keyboard activation, loading/failure/retry, rich text and draft preservation. Native initial-render checks do not replace those interactions.
+Run `npm run check`, `npm test` and `herdr-app check mods/sulan`. Use an isolated home/core/display for native visual checks. Check summary, chat and settings at 396px and 300px, long answers, keyboard activation, loading/failure/retry, rich text and draft preservation. Change both models through native inputs, save, restart the isolated app and verify the choices restore independently. Native initial-render checks do not replace those interactions.
 
 The regression host counts actual View calls and element descriptions. Its counts demonstrate eliminated hidden work, not a measured end-to-end frame time. Preserve the active-only rendering test when adding features.
