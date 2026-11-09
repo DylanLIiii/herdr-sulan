@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="440" viewBox="0 0 720 440">
-  <title>Sulan sidebar beside the active Herdr terminal: layout schematic</title>
+  <title>Sulan focused sidebar beside the active Herdr terminal</title>
   <rect width="720" height="440" rx="12" fill="#181b1f"/>
   <rect width="144" height="440" fill="#111316"/>
   <path d="M144 0v440M144 40h576" stroke="#343b45"/>
@@ -15,24 +15,22 @@
   </g>
   <rect x="154" y="50" width="314" height="376" rx="7" fill="#17191c" stroke="#343b45"/>
   <text x="170" y="76" fill="#d5dce5" font-family="monospace" font-size="12">$ work in your project</text>
-  <rect x="478" y="50" width="232" height="376" rx="7" fill="#20242a" stroke="#343b45"/>
+  <rect x="478" y="50" width="232" height="376" rx="7" fill="#181b1f" stroke="#343b45"/>
+  <g font-family="sans-serif" fill="#d5dce5">
+    <text x="492" y="75" font-size="12">Sulan · Project</text>
+    <text x="492" y="104" font-size="12" fill="#80a8ff">Brief</text>
+    <text x="544" y="104" font-size="12" fill="#b0bac7">Chat</text>
+    <text x="492" y="143" font-size="17" font-weight="600">The project in focus.</text>
+  </g>
+  <rect x="492" y="165" width="204" height="62" rx="6" fill="#292d32"/>
   <g font-family="sans-serif" font-size="12">
-    <text x="492" y="75" fill="#d5dce5">Sulan · Project catch-up</text>
-    <text x="492" y="103" fill="#d5dce5">TL;DR: project progress at a glance</text>
-    <text x="492" y="130" fill="#80a8ff">Summary</text>
-    <text x="564" y="130" fill="#b0bac7">Chat</text>
-    <text x="616" y="130" fill="#b0bac7">Terminals</text>
-    <text x="492" y="166" fill="#80a8ff">Goal</text>
-    <text x="492" y="215" fill="#a995ed">Changes</text>
-    <text x="492" y="264" fill="#55b97b">Current state</text>
-    <text x="492" y="313" fill="#55b8b2">Next step</text>
-    <text x="492" y="362" fill="#80a8ff">Progress</text>
+    <text x="504" y="185" fill="#e2b778">Needs your attention</text>
+    <text x="504" y="208" fill="#d5dce5">A clear decision to make</text>
+    <text x="492" y="258" fill="#d5dce5" font-weight="600">Current progress</text>
+    <text x="492" y="313" fill="#d5dce5" font-weight="600">Key conclusion</text>
+    <text x="492" y="368" fill="#d5dce5" font-weight="600">Next step</text>
   </g>
   <g stroke="#8d98a8" stroke-width="3" stroke-linecap="round">
-    <path d="M494 180h160M494 191h128M494 229h176M494 240h140M494 278h166M494 289h118M494 327h155"/>
+    <path d="M494 273h176M494 285h145M494 328h166M494 340h119M494 383h166"/>
   </g>
-  <rect x="494" y="374" width="82" height="5" rx="2" fill="#55b97b"/>
-  <rect x="578" y="374" width="46" height="5" rx="2" fill="#dca359"/>
-  <rect x="626" y="374" width="66" height="5" rx="2" fill="#343b45"/>
-  <rect x="535" y="391" width="118" height="23" rx="5" fill="#181b1f" stroke="#dca359"/>
 </svg>

@@ -5,11 +5,11 @@ export const SECTION_ORDER = ['why', 'did', 'out', 'now', 'next', 'terms']
 
 // Headings the model might write instead of the ids, mapped back to the ids
 const ALIASES = {
-  why: 'why', 目标: 'why',
-  did: 'did', 做了: 'did', 做了什么: 'did',
-  out: 'out', 结论: 'out',
-  now: 'now', 现状: 'now',
-  next: 'next', 需要你: 'next', 下一步: 'next',
+  why: 'why', 目标: 'why', 项目目标: 'why',
+  did: 'did', 做了: 'did', 做了什么: 'did', 最新进展: 'did',
+  out: 'out', 结论: 'out', 关键结论: 'out',
+  now: 'now', 现状: 'now', 当前进展: 'now',
+  next: 'next', 需要你: 'next', 下一步: 'next', 接下来: 'next',
   terms: 'terms', glossary: 'terms', 名词: 'terms', 术语: 'terms', 概念: 'terms', 名词与概念: 'terms', 名词解释: 'terms',
   flow: 'flow', 进度: 'flow', 流程: 'flow',
 }

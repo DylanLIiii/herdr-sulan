@@ -11,6 +11,9 @@ const MOD_FILES = [
   'mod.json',
   'sulan.svg',
   'summary.js',
+  'brief.js',
+  'view.js',
+  'workspace.js',
   'diagram.js',
   'text.js',
   'chat.js',
@@ -61,9 +64,9 @@ export async function installSulan({
   await mkdir(join(modDir, 'vendor'), { recursive: true })
 
   for (const rel of MOD_FILES) {
-    if (rel === 'main.js' && name !== 'sulan') {
-      const src = await readFile(join(root, 'mods', 'sulan', 'main.js'), 'utf8')
-      await writeFile(join(modDir, 'main.js'), src.replaceAll('mods/sulan/', `mods/${name}/`), { flag: 'wx' })
+    if (rel.endsWith('.js') && name !== 'sulan') {
+      const src = await readFile(join(root, 'mods', 'sulan', rel), 'utf8')
+      await writeFile(join(modDir, rel), src.replaceAll('mods/sulan/', `mods/${name}/`), { flag: 'wx' })
     } else {
       await cp(join(root, 'mods', 'sulan', rel), join(modDir, rel), { force: false, errorOnExist: true })
     }

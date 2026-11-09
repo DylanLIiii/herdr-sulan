@@ -40,7 +40,23 @@ test('width and cells align wide CJK characters properly', () => {
 })
 
 test('parseSummary parses all 6 sections, status tags, and flow diagram', () => {
-  const sample = DEMO_PROJECTS[0].summary
+  const sample = `TLDR: Sulan 右侧边栏已就绪
+## why
+- 项目目标
+## did
+- 已完成的工作
+## out
+- 关键结论
+## now
+- [done] 已完成
+- [wip] 进行中
+- [fail] 待关注
+## next
+- [ask] 需要决定的事？
+## terms
+- **速览**：项目重点
+## flow
+${FLOW}`
   const parsed = parseSummary(sample)
   assert.ok(parsed)
   assert.match(parsed.tldr, /Sulan 右侧边栏已就绪/)
@@ -57,7 +73,7 @@ test('parseSummary parses all 6 sections, status tags, and flow diagram', () => 
   assert.equal(nextItems[0].status, 'ask')
 
   const p = progressOf(parsed, flowNodes)
-  assert.deepEqual(p, { total: 4, done: 1, wip: 1, fail: 1, todo: 1, pct: 25 })
+  assert.deepEqual(p, { total: 5, done: 2, wip: 1, fail: 1, todo: 1, pct: 40 })
   assert.deepEqual(inlineSpans('修改 `mods/sulan/main.js` 的 **核心视图**'), [
     { text: '修改 ' },
     { text: 'mods/sulan/main.js', code: true },
@@ -100,7 +116,7 @@ test('splitReply and replyFields separate <think> tags without counting thinking
   assert.match(fields.thinking, /First check/)
 })
 
-test('gatherProjectSnapshot and buildInstantSummary synthesize live space, git, and agent state', async () => {
+test('project context uses terminal evidence without Git or process execution', async () => {
   const spacesList = [
     {
       id: 'sp-1',
@@ -207,9 +223,8 @@ test('gatherProjectSnapshot and buildInstantSummary synthesize live space, git, 
   })
 
   assert.equal(snap.project.name, 'sulan')
-  assert.equal(snap.git.branch, 'main')
-  assert.equal(snap.git.ahead, 1)
-  assert.equal(snap.git.totalFiles, 1)
+  assert.equal(snap.git, undefined)
+  assert.doesNotMatch(snap.contextText, /Git Repository|Changed files|Recent commits/)
   // Blocked agent t14 is sorted first
   assert.equal(snap.agents[0].address, 't14')
   assert.equal(snap.agents[1].address, 't8')
@@ -219,10 +234,12 @@ test('gatherProjectSnapshot and buildInstantSummary synthesize live space, git, 
   const instant = buildInstantSummary(snap)
   const parsed = parseSummary(instant)
   assert.ok(parsed)
-  assert.match(parsed.tldr, /1 个 Agent 等待处理/)
+  assert.match(parsed.tldr, /Implementing flow diagram/)
   assert.ok(parsed.sections.some((s) => s.id === 'now'))
   assert.ok(parsed.sections.some((s) => s.id === 'next'))
-  assert.ok(parsed.flow)
+  assert.equal(parsed.flow, null)
+  assert.doesNotMatch(instant, /Git|未提交|分支|diff/)
+  assert.ok(!parsed.sections.some(s => s.items.some(i => i.status === 'ask')), 'blocked alone must not invent a decision')
 })
 
 test('completeModel supports both Anthropic /v1/messages and OpenAI /v1/chat/completions shapes', async () => {

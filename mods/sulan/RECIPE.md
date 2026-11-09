@@ -1,48 +1,40 @@
-# Sulan sidebar
+# Sulan · focused project sidebar
 
-A native Herdr sidebar for catching up on the active project while keeping its terminals visible. The panel shows a TL;DR, structured summary, progress diagram, terminal activity and a separate project conversation.
+A native Herdr sidebar for understanding the current project quickly and asking a follow-up without leaving its terminals.
 
-![Native Herdr sidebar with synthetic demonstration data](../../preview.png)
+![Native preview with synthetic data](../../preview.png)
 
-## What you see
+## Surface
 
-- A 396px right panel in the supplied personal layout; standalone Mod docking requests 420px. It follows `theme()` and uses a rounded frame with a 1px border.
-- A 36px title strip: Sulan title, project/branch and update status. Below it, a TL;DR and the tabs **速览 / 侧聊 / 终端**, plus refresh, rebuild and demo/live controls.
-- **速览** contains compact sections for goal, changes, conclusions, current state, next steps and terminology. State markers are ✓ done, ◐ in progress, ✗ failed/blocked, ? needs an answer and ○ pending.
-- The progress region displays a segmented bar and native GPUI nodes grouped into layers from a simple Mermaid flowchart. This is a small flowchart subset, not a general Mermaid renderer.
-- **终端** lists the active Space's agents, child terminals, Git branch, files and commits. **侧聊** contains a question field, model/effort controls and recent exchanges with collapsible Thinking.
+The standard workspace keeps its terminals, Files and Changes. The Sulan toggle opens a 396px sidebar; `mod.json` requests 420px when independently docked. The sidebar contains two tabs: **速览** (brief) and **侧聊** (conversation).
 
-## How it behaves
+The brief leads with a clear 18px conclusion, followed by a highlighted attention region when there is evidence of a decision or problem. Native `TextView.markdown` renders current progress, key conclusions and the next step in regular 13px text with 21px leading. Bold phrases and inline code carry emphasis. Background and the full older summary are disclosed only on request. There is no terminal statistics page or progress percentage.
 
-- The workspace tab bar has a **速览** toggle next to Files and Changes. Clicking an active panel button closes the panel; another opens its stack child. The tab bar remembers the selection per Space in its own localStorage.
-- The content selects the active Space and its terminal folder. It loads that key's saved summary and chat, collects Git facts and bounded terminal screen excerpts, and checks again every 6 seconds while visible. Local repositories also use `watchFolder`.
-- **Refresh** and **Rebuild** request an AI summary. Rebuild clears the previous summary first. Timer and folder updates collect facts without triggering model requests. A model failure falls back to the deterministic snapshot.
-- Agent cards focus their pane/tab. Child terminals without a pane use `terminal.peek`. Demo mode uses synthetic fixtures and does not navigate real terminals.
-- Side chat sends the summary, bounded snapshot and recent exchanges to the configured model endpoint. It has no tools. Failed questions can be retried or edited; clearing requires a second click.
-- Keys while the panel has focus: `r` refresh, `b` rebuild, `c` chat, `d` demo/live, `1/2/3` summary/terminals/chat, Escape leaves input focus.
+The conversation shows the latest question and a Markdown answer, with previous turns collapsed by default. A multiline composer stays outside the transcript's scroll region at the bottom. Model and effort controls are tucked into settings; copy, retry and clear remain available. Thinking is collapsed. A long answer must not push the input out of view.
 
-## Built from
+Use Herdr theme tokens, flat reading sections and restrained borders. Avoid arbitrary rainbow headings, per-line native text elements and nested message cards.
 
-- `layouts/sulan.json`: the standard workspace structure with `spaces`, `agents`, active terminal panes, Files and Changes. The `tabs` block uses `sulan` with `role: "tabs"`; `panel-body` includes `sulan` with `role: "sidebar"`, selected initially.
-- `mods/sulan/main.js`: `View` with default sidebar role and a workspace-tab-bar role. The shipped layout does not use the older page/nav roles still present in the source.
-- `context.js`: Space/agent selection, read-only Git commands and `hc read` screen tails. `summary.js` parses the six-section format; `diagram.js` creates GPUI flow layers and retains the Sulan ASCII helpers. `chat.js` constructs prompts and separates Thinking; `llm.js` calls Anthropic/OpenAI-compatible endpoints.
-- `mod.json`: `{ "place": "right", "size": 420, "focusable": true }`.
-- APIs: `spaces`, `panes`, `focused`, `agents`, `terminals`, `exec`, `hc`, `run`, `openOverlay`, `theme`, `layout`, `settings`, `props`, `shared`, `setShared`, `nextCommand`, `watchFolder`.
-- Program access: Git reads on the Space's machine; `hc read` for terminal excerpts. File access is to the selected repository through Git and watching. AI requests send the collected context to `props.endpoint`, default `http://127.0.0.1:3425/v1/messages`. Model/key settings are personal props, not repository credentials.
+## Data and behavior
 
-## Watch out
+- `context.js` selects the active Space and collects bounded screen excerpts from up to four agents using parallel `hc read` calls. It does not execute Git, scan files or collect diffs/commit counts.
+- The model prompt merges task evidence into a short result-oriented brief. It does not invent user decisions from a terminal's `blocked` status. Terminal titles alone do not prove completed validation.
+- Click Update to synthesize with the configured model. Rebuild is in More and leaves the visible summary in place until a replacement succeeds. Background collection every 10 seconds does not call the model.
+- `main.js` owns state and request generation guards. Switching tabs changes only the active surface. `view.js` builds only that surface; no hidden summary, diagram, transcript or terminal panel is materialized.
+- `brief.js` prepares Markdown hierarchy once when the summary changes. The old summary parser remains compatible with existing stored six-section summaries.
+- Each surface has its own stable scroll id. The multiline draft lives in retained `TextareaState`, survives tab switches, and submits with Ctrl/Command+Enter or Send. Ordinary typing only invalidates the outer sidebar when the Send button changes enabled state.
+- Space switches invalidate late context/model replies, clear transient UI state and restore that Space's summary/chat. localStorage belongs to the particular Mod copy. Request deadlines release loading state and ignore late replies; native fetch itself cannot be cancelled.
 
-- Duplicate shipped layouts before modifying their structure. The installer creates a separate personal layout and refuses existing names. Some Herdr releases do not auto-dock new Mods into shipped layouts; a split pane remains available.
-- Terminal excerpts are bounded screen tails, not complete conversation history. The initial snapshot waits for collection; only a saved summary is available immediately.
-- localStorage belongs to each Mod copy. Separate sidebar/split copies do not share summary or chat history. Saved keys have no retention limit yet.
-- A cached AI summary can remain older than the latest terminal/Git view until manual refresh. The gateway must provide its own request deadline; native fetch is not cancelled by an application watchdog.
-- Effort is sent for non-default OpenAI-compatible requests. Anthropic effort is not currently transmitted.
-- Use each callback's own `cx`. Spinners use native `frames`, not script redraw timers. QuickJS receives a fallback when `Intl.Segmenter` is missing.
-- Source attribution and licenses are in the repository's `THIRD-PARTY-NOTICES.md`; include them when redistributing.
+## Implementation
 
-## Done when
+- `layouts/sulan.json` is a personal adaptation of Herdr's default workspace with a `panel-body` Sulan child.
+- `main.js` defaults to sidebar mode. The same Mod with `role: "tabs"` delegates the workspace tab bar to `workspace.js`, adapted under Herdr's Apache-2.0 license.
+- `view.js` uses GPUI `Button`, `TextView`, `Textarea` and a scroll area with an adjacent `Scrollbar`. All callbacks use their own `cx`; retained text state is created in init.
+- `chat.js` handles prompts and separates returned Thinking from final answers; `llm.js` supports Anthropic/OpenAI-compatible endpoints. Default: `http://127.0.0.1:3425/v1/messages`, `auto/deepseek-v4.1-flash`. Model requests transmit the selected context to that endpoint.
+- `demo.js` contains synthetic concise content. Do not publish captured real terminal transcripts as preview data.
+- `scripts/install-layout.js` copies every runtime module and license, refuses existing names and rewrites asset paths for custom names.
 
-- `herdr-app check mods/sulan` and `npm test` pass.
-- In an isolated Herdr home, the personal layout shows terminals beside the right sidebar; 速览 / Files / Changes switch the right panel.
-- The active Space's summary, terminals and Git facts appear, and demo mode remains distinguishable from live context.
-- With a configured model gateway, refresh, chat, retry, Thinking, copy and clear work in the actual app. Initial-load checks and screenshots alone do not prove this last item.
+## Verification
+
+Run `npm run check`, `npm test` and `herdr-app check mods/sulan`. Use an isolated home/core/display for native visual checks. Check summary and chat at 396px and 300px, long answers, keyboard activation, loading/failure/retry, rich text and draft preservation. Native initial-render checks do not replace those interactions.
+
+The regression host counts actual View calls and element descriptions. Its counts demonstrate eliminated hidden work, not a measured end-to-end frame time. Preserve the active-only rendering test when adding features.
