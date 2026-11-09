@@ -7,14 +7,6 @@ export const MAX_ANSWER = 4000
 export const MAX_THINKING = 4000
 const HISTORY_CHARS = 24_000
 
-export const DEFAULT_MODELS = [
-  { value: 'auto/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash (快速)' },
-  { value: 'auto/claude-haiku-5-5', label: 'Claude Haiku 5.5' },
-  { value: 'auto/claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
-  { value: 'auto/gemini-4-argon', label: 'Gemini 4 Argon' },
-  { value: 'auto/gpt-6-astra', label: 'GPT-6 Astra' },
-]
-
 export const EFFORT_CHOICES = [
   { value: 'low', label: '较快 (low)' },
   { value: 'medium', label: '适中 (medium)' },

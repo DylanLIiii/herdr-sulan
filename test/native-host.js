@@ -11,6 +11,7 @@ import * as llm from '../mods/sulan/llm.js'
 import * as demo from '../mods/sulan/demo.js'
 import * as brief from '../mods/sulan/brief.js'
 import * as modelSettings from '../mods/sulan/model-settings.js'
+import * as modelDiscovery from '../mods/sulan/models.js'
 
 export async function createHost(options = {}) {
   let source = await readFile(new URL('../mods/sulan/main.js', import.meta.url), 'utf8')
@@ -44,7 +45,8 @@ export async function createHost(options = {}) {
     spawn(callback) { const task = callback(cx); task?.catch?.(error => { commands.push({ error }) }); return task },
   }
   const context = {
-    ...summary, ...diagram, ...text, ...chat, ...project, ...llm, ...demo, ...brief, ...modelSettings,
+    ...summary, ...diagram, ...text, ...chat, ...project, ...llm, ...demo, ...brief, ...modelSettings, ...modelDiscovery,
+    fetchModels: options.fetchModels || (async () => []),
     completeModel: options.completeModel || llm.completeModel,
     View: class {}, div: () => element(), svg: () => element('svg'), image: () => element('image'),
     h_flex: () => element('row'), v_flex: () => element('column'),

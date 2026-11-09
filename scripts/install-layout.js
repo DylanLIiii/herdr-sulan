@@ -14,6 +14,7 @@ const MOD_FILES = [
   'brief.js',
   'view.js',
   'model-settings.js',
+  'models.js',
   'settings-view.js',
   'workspace.js',
   'diagram.js',

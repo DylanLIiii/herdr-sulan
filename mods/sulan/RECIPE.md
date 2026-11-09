@@ -12,7 +12,7 @@ The brief leads with a clear 18px conclusion, followed by a highlighted attentio
 
 The conversation shows the latest question and a Markdown answer, with previous turns collapsed by default. A multiline composer stays outside the transcript's scroll region at the bottom. Copy, retry and clear remain available. Thinking is collapsed. A long answer must not push the input out of view.
 
-The header **设置** button and the conversation's **模型设置** button open one dedicated full-height settings page. Sulan's summary model and Side Chat's model have separate editable fields and optional common-model choices. A shared service section contains the full endpoint URL and masked API key; a fixed footer has Cancel and Save and return. It is a subpage, not a third main tab.
+The header **设置** button and the conversation's **模型设置** button open one dedicated full-height settings page. Sulan's summary model and Side Chat's model have separate editable fields and searchable choices from the service's `/v1/models` catalog. The list loads on first opening and has an explicit refresh action. Only 40 matching choices render at once; a bounded scroller and search keep large catalogs readable. A shared service section contains the full endpoint URL and masked API key; a fixed footer has Cancel and Save and return. It is a subpage, not a third main tab.
 
 Use Herdr theme tokens, flat reading sections and restrained borders. Avoid arbitrary rainbow headings, per-line native text elements and nested message cards.
 
@@ -33,12 +33,13 @@ Use Herdr theme tokens, flat reading sections and restrained borders. Avoid arbi
 - `main.js` defaults to sidebar mode. The same Mod with `role: "tabs"` delegates the workspace tab bar to `workspace.js`, adapted under Herdr's Apache-2.0 license.
 - `view.js` uses GPUI `Button`, `TextView`, `Textarea` and a scroll area with an adjacent `Scrollbar`. All callbacks use their own `cx`; retained text state is created in init or an event.
 - `settings-view.js` renders the settings subpage; `model-settings.js` resolves defaults, migrates prior preferences and validates model/service fields. The masked native `InputState` handles are created lazily in the opening event and are not recreated during render.
+- `models.js` performs an authenticated GET of the catalog, preserves proxy prefixes, follows cursor pagination and deduplicates IDs. A 20-second UI deadline, source comparison and request generation prevent late or previous-service results from overwriting the list. Fetch failure keeps manual input available; fetching never changes selected model IDs or sends terminal context.
 - `chat.js` handles prompts and separates returned Thinking from final answers; `llm.js` supports Anthropic/OpenAI-compatible endpoints. Default: `http://127.0.0.1:3425/v1/messages`, `auto/deepseek-v4.1-flash`. Model requests transmit the selected context to that endpoint.
 - `demo.js` contains synthetic concise content. Do not publish captured real terminal transcripts as preview data.
 - `scripts/install-layout.js` copies every runtime module and license, refuses existing names and rewrites asset paths for custom names.
 
 ## Verification
 
-Run `npm run check`, `npm test` and `herdr-app check mods/sulan`. Use an isolated home/core/display for native visual checks. Check summary, chat and settings at 396px and 300px, long answers, keyboard activation, loading/failure/retry, rich text and draft preservation. Change both models through native inputs, save, restart the isolated app and verify the choices restore independently. Native initial-render checks do not replace those interactions.
+Run `npm run check`, `npm test` and `herdr-app check mods/sulan`. Use an isolated home/core/display for native visual checks. Check summary, chat and settings at 396px and 300px, long answers, keyboard activation, loading/failure/retry, rich text and draft preservation. Change both models through native inputs, save, restart the isolated app and verify the choices restore independently. Against a synthetic local catalog, verify the actual GET, search and select two different models from a large list. Native initial-render checks do not replace those interactions.
 
 The regression host counts actual View calls and element descriptions. Its counts demonstrate eliminated hidden work, not a measured end-to-end frame time. Preserve the active-only rendering test when adding features.

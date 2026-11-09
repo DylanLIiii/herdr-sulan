@@ -11,6 +11,7 @@ import { MAX_QUESTION, MAX_ANSWER, MAX_TURNS, cleanTurns, replyFields, splitRepl
 import { completeModel } from './llm.js'
 import { resolveModelSettings, validateModelSettings } from './model-settings.js'
 import { modelSettingsView } from './settings-view.js'
+import { fetchModels } from './models.js'
 import { DEMO_PROJECTS } from './demo.js'
 import { action, summaryView, chatView } from './view.js'
 import { findNode, renderWorkspaceTabs } from './workspace.js'
@@ -52,6 +53,12 @@ export default class Sulan extends View {
     this.settingsError = ''
     this.settingsNotice = ''
     this.settingsNoticeVersion = 0
+    this.modelChoices = []
+    this.modelsStatus = 'idle'
+    this.modelsError = ''
+    this.modelsSource = null
+    this.modelsEpoch = 0
+    this.modelQuery = ''
     this.loadingContext = false
     this.summarizing = false
     this.queuedAi = false
@@ -113,7 +120,7 @@ export default class Sulan extends View {
   }
 
   busy() { return this.loadingContext || this.summarizing }
-  close() { this.closed = true; this.generation++; this.chatEpoch++ }
+  close() { this.closed = true; this.generation++; this.chatEpoch++; this.modelsEpoch++ }
   visible() {
     const root = layout(), panel = findNode(root, 'panel'), body = findNode(root, 'panel-body')
     return !(panel && findNode(body, 'sulan') && (panel.hidden || body.active !== 'sulan'))
@@ -160,17 +167,67 @@ export default class Sulan extends View {
       this.settingsInputs = {}
       for (const key of ['summaryModel', 'chatModel', 'endpoint', 'apiKey']) {
         const state = InputState.new({ placeholder: key === 'endpoint' ? 'https://gateway/v1/messages' : key === 'apiKey' ? '可留空' : '模型名称或完整路由' })
-        state.on('change', (_event, cx) => { if (this.settingsError) { this.settingsError = ''; cx.notify() } })
+        state.on('change', (_event, cx) => {
+          if (this.settingsError) { this.settingsError = ''; cx.notify() }
+          if ((key === 'endpoint' || key === 'apiKey') && this.page === 'settings') this.invalidateModels(cx)
+        })
         this.settingsInputs[key] = state
       }
       this.settingsInputs.apiKey.set_masked(true)
+      this.modelSearchInput = InputState.new({ placeholder: '搜索模型名称或路由…' })
+      this.modelSearchInput.on('change', (_event, cx) => { this.modelQuery = this.modelSearchInput.value(); cx.notify() })
     }
     for (const [key, state] of Object.entries(this.settingsInputs)) state.set_value(this[key])
     this.settingsEffort = this.chatEffort
     this.settingsPicker = null; this.settingsError = ''; this.menuOpen = false
     this.page = 'settings'; this.focus.focus(); cx.notify()
+    this.loadModels(cx)
+  }
+  modelServiceDraft() {
+    return { endpoint: this.settingsInputs.endpoint.value().trim(), apiKey: this.settingsInputs.apiKey.value().trim() }
+  }
+  modelsMatch(source) {
+    const draft = this.modelServiceDraft()
+    return source && source.endpoint === draft.endpoint && source.apiKey === draft.apiKey
+  }
+  invalidateModels(cx) {
+    if (!this.modelsSource || this.modelsMatch(this.modelsSource)) return
+    this.modelsEpoch++; this.modelsSource = null; this.modelChoices = []
+    this.modelsStatus = 'idle'; this.modelsError = ''; cx.notify()
+  }
+  loadModels(cx, { force = false } = {}) {
+    if (this.closed || this.page !== 'settings') return
+    const source = this.modelServiceDraft()
+    if (!force && this.modelsMatch(this.modelsSource) && ['loading', 'ready'].includes(this.modelsStatus)) return
+    const epoch = ++this.modelsEpoch
+    const current = () => !this.closed && this.page === 'settings' && epoch === this.modelsEpoch && this.modelsMatch(source)
+    this.modelsSource = source; this.modelsStatus = 'loading'; this.modelsError = ''; this.modelChoices = []
+    cx.notify()
+    cx.timer.after(20000, cx => {
+      if (!current() || this.modelsStatus !== 'loading') return
+      this.modelsEpoch++; this.modelsStatus = 'error'
+      this.modelsError = '获取模型列表超时。可刷新重试，或直接填写模型名称。'; cx.notify()
+    })
+    cx.spawn(async cx => {
+      try {
+        const models = await fetchModels({ ...source, isCurrent: current })
+        if (!current()) return
+        this.modelChoices = models; this.modelsStatus = 'ready'
+      } catch (error) {
+        if (!current()) return
+        this.modelsStatus = 'error'; this.modelsError = error.message || '暂时无法获取模型列表。'
+      } finally { if (current()) cx.notify() }
+    })
+  }
+  toggleModelPicker(key, cx) {
+    this.settingsPicker = this.settingsPicker === key ? null : key
+    this.modelQuery = ''; this.modelSearchInput.set_value('')
+    if (this.settingsPicker && this.modelsStatus === 'idle') this.loadModels(cx)
+    cx.notify()
   }
   closeSettings(cx) {
+    this.modelsEpoch++
+    if (this.modelsStatus === 'loading') { this.modelsStatus = 'idle'; this.modelsSource = null }
     this.page = 'content'; this.settingsPicker = null; this.settingsError = ''
     this.typing = false; this.focus.focus(); cx.notify()
   }

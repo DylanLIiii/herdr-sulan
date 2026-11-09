@@ -1,6 +1,6 @@
 import { div } from 'gpui-kit'
 import { h_flex, v_flex, Input, Scrollbar } from 'gpui-base'
-import { DEFAULT_MODELS, EFFORT_CHOICES } from './chat.js'
+import { EFFORT_CHOICES } from './chat.js'
 import { action } from './view.js'
 
 export function modelSettingsView(view, t) {
@@ -16,17 +16,37 @@ export function modelSettingsView(view, t) {
       .child(div().text_size(15).font_semibold().child(title))
       .child(hint(description))
       .child(field(`settings-${key}`, inputs[key], `${title}模型`))
-      .child(action(`settings-pick-${key}`, open ? '收起常用模型' : '选择常用模型', t, cx => {
-        view.settingsPicker = open ? null : key; cx.notify()
+      .child(action(`settings-pick-${key}`, open ? '收起模型列表' : '从列表选择', t, cx => view.toggleModelPicker(key, cx), {
+        disabled: view.modelsStatus === 'loading' || (!open && !view.modelChoices.length),
       }))
-    if (open) for (const [index, model] of DEFAULT_MODELS.entries()) section.child(action(`settings-${key}-choice-${index}`, model.label, t, cx => {
-      inputs[key].set_value(model.value); view.settingsPicker = null; view.settingsError = ''; cx.notify()
-    }))
+    if (open) {
+      const query = view.modelQuery.trim().toLowerCase()
+      const matches = view.modelChoices.filter(model => `${model.id} ${model.label}`.toLowerCase().includes(query))
+      section.child(field('settings-model-search', view.modelSearchInput, '搜索模型名称或路由'))
+        .child(hint(matches.length > 40 ? `匹配 ${matches.length} 个模型，显示前 40 个；输入关键词缩小范围。` : `匹配 ${matches.length} 个模型`))
+      if (!matches.length) section.child(hint('没有匹配的模型，可更换关键词或直接填写模型名称。'))
+      else {
+        const choices = v_flex().id('settings-model-options').absolute().inset_0().overflow_y_scroll().gap(3)
+        for (const [index, model] of matches.slice(0, 40).entries()) {
+          const title = model.label === model.id ? model.id : `${model.label} · ${model.id}`
+          choices.child(action(`settings-${key}-choice-${index}`, title, t, cx => {
+            inputs[key].set_value(model.id); view.settingsPicker = null; view.settingsError = ''; cx.notify()
+          }, { active: inputs[key].value() === model.id }).flex_none().w_full().min_w(0).overflow_hidden().justify_start())
+        }
+        section.child(div().h(210).relative().child(choices).child(Scrollbar.vertical('settings-model-options').absolute().inset_0()))
+      }
+    }
     return section
   }
   const line = () => div().h(1).w_full().bg(t.border)
   const form = v_flex().gap(22).w_full().min_w(0)
-    .child(hint('分别选择速览总结与侧聊的模型，也可以直接填写网关支持的完整模型或路由名。'))
+    .child(v_flex().gap(8)
+      .child(hint('从服务的模型列表为速览与侧聊分别选择，也可以直接填写完整模型或路由名。'))
+      .child(h_flex().items_center().gap(6)
+        .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(view.modelsStatus === 'loading' ? '正在获取模型列表…' : view.modelsStatus === 'ready' ? `已获取 ${view.modelChoices.length} 个模型` : '从 /v1/models 获取模型'))
+        .child(action('settings-refresh-models', '刷新列表', t, cx => view.loadModels(cx, { force: true }), { disabled: view.modelsStatus === 'loading' })))
+      .when(Boolean(view.modelsError), el => el.child(div().text_size(12).line_height('19px').text_color(t.blocked).child(view.modelsError)))
+      .when(view.modelsStatus === 'ready' && !view.modelChoices.length, el => el.child(hint('服务未返回可选模型，仍可手动填写。'))))
     .child(modelField('summaryModel', 'Sulan · 速览', '更新项目重点时使用的模型。'))
     .child(line())
     .child(modelField('chatModel', 'Side Chat · 侧聊', '回答项目问题时使用的模型，与速览独立设置。'))
@@ -46,7 +66,7 @@ export function modelSettingsView(view, t) {
       .child(div().pt(4).text_size(12).font_medium().child('API Key'))
       .child(field('settings-api-key', inputs.apiKey, 'API Key'))
       .child(hint('密钥以遮罩显示。留空表示不发送认证凭据。')))
-    .child(hint('设置保存在当前 Herdr Mod 的本地配置中，重启后保留。保存不会发送模型请求，下一次更新或提问时生效。'))
+    .child(hint('设置保存在当前 Herdr Mod 的本地配置中，重启后保留。保存不会请求生成内容，下一次更新或提问时生效。'))
   return v_flex().id('sulan-settings-page').size_full().min_w(0).min_h(0).rounded(10).overflow_hidden()
     .bg(t.background).border_1().border_color(t.border).text_color(t.foreground).font_normal()
     .track_focus(view.focus).on_key_down((event, cx) => view.handleKey(event, cx))

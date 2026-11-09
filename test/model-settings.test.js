@@ -75,7 +75,7 @@ test('validation and storage failures do not apply half-saved settings', async (
   }
 })
 
-test('saving sends no request; summary and Side Chat subsequently use their separate saved models', async () => {
+test('saving sends no completion request; summary and Side Chat subsequently use their separate saved models', async () => {
   const requests = []
   const { mod, cx } = await createHost({ props: { mode: 'live' },
     spaces: [{ id: 'project', active: true, name: 'Project', folder: '/project', tabs: [] }],
