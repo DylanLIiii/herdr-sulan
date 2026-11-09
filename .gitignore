@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+gpui-kit.d.ts
+herdr.d.ts
+jsconfig.json
+*.error
+test-results/
+playwright-report/
+# Local early browser prototype; not part of the native sidebar distribution.
+/public/

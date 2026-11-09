@@ -1,0 +1,17 @@
+{
+  "name": "herdr-sulan",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native Herdr sidebar for project catch-up, agent activity, progress, and side chat",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/DylanLIiii/herdr-sulan.git" },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "node scripts/check.js",
+    "install-layout": "node scripts/install-layout.js"
+  }
+}
