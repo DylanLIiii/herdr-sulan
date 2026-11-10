@@ -2,6 +2,8 @@ import { cp, mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { connectionPath } from '../agent/paths.js'
+import { validateAgentConnection } from '../mods/sulan/agent-client.js'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const exists = (p) => access(p).then(() => true, () => false)
@@ -15,6 +17,7 @@ const MOD_FILES = [
   'view.js',
   'model-settings.js',
   'models.js',
+  'agent-client.js',
   'settings-view.js',
   'workspace.js',
   'diagram.js',
@@ -32,6 +35,8 @@ export async function installSulan({
   home = process.env.HERDR_APP_HOME || join(homedir(), '.config', 'herdr-app'),
   name = 'sulan',
   endpoint = 'http://127.0.0.1:3425/v1/messages',
+  agentConnection,
+  agentConnectionFile = connectionPath(),
 } = {}) {
   if (!/^[a-z][a-z0-9-]{0,39}$/.test(name)) {
     throw new Error('Name must use lowercase letters, digits and hyphens, starting with a letter.')
@@ -52,12 +57,17 @@ export async function installSulan({
     }
   }
 
+  let connection = agentConnection
+  if (connection === undefined) {
+    try { connection = JSON.parse(await readFile(agentConnectionFile, 'utf8')) } catch { connection = null }
+  }
+  const agentProps = connection ? validateAgentConnection({ agentEndpoint: connection.endpoint, agentToken: connection.token }) : {}
   const layout = JSON.parse(await readFile(join(root, 'layouts', 'sulan.json'), 'utf8'))
   layout.preview = `layouts/${name}.svg`
   const walk = (node) => {
     if (node.content?.mod === 'sulan') {
       node.content.mod = name
-      node.content.props = { ...(node.content.props || {}), endpoint: url.href }
+      node.content.props = { ...(node.content.props || {}), endpoint: url.href, ...agentProps }
     }
     for (const child of node.children || []) walk(child)
   }
@@ -80,24 +90,24 @@ export async function installSulan({
   }
 
   await writeFile(previewPath, await readFile(join(root, 'layouts', 'sulan.svg')), { flag: 'wx' })
-  await writeFile(layoutPath, `${JSON.stringify(layout, null, 2)}\n`, { flag: 'wx' })
+  await writeFile(layoutPath, `${JSON.stringify(layout, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
 
-  return { home: destination, name, modDir, layoutPath, previewPath }
+  return { home: destination, name, modDir, layoutPath, previewPath, agentConfigured: Boolean(agentProps.agentToken) }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const options = {}
   try {
     for (let i = 2; i < process.argv.length; i += 2) {
-      const key = { '--home': 'home', '--name': 'name', '--endpoint': 'endpoint' }[process.argv[i]]
+      const key = { '--home': 'home', '--name': 'name', '--endpoint': 'endpoint', '--agent-connection': 'agentConnectionFile' }[process.argv[i]]
       if (!key || !process.argv[i + 1]) {
-        throw new Error('Usage: node scripts/install-layout.js [--home DIR] [--name NAME] [--endpoint URL]')
+        throw new Error('Usage: node scripts/install-layout.js [--home DIR] [--name NAME] [--endpoint URL] [--agent-connection FILE]')
       }
       options[key] = process.argv[i + 1]
     }
     const res = await installSulan(options)
     console.log(
-      `Installed ${res.name} into ${res.home}\nVerify with: herdr-app check ${res.modDir}\nSwitch layout with: herdr-app do layout.switch --name ${res.name}`,
+      `Installed ${res.name} into ${res.home}\nPi Agent: ${res.agentConfigured ? 'connection configured' : 'start npm run agent and reinstall under a new name, or fill the Agent connection in settings'}\nVerify with: herdr-app check ${res.modDir}\nSwitch layout with: herdr-app do layout.switch --name ${res.name}`,
     )
   } catch (err) {
     console.error(err.message)

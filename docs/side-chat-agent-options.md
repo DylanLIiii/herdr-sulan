@@ -1,68 +1,83 @@
-# Side Chat Agent 候选与接入建议
+# Side Chat Agent：Pi SDK + billion-context
 
-状态：架构建议。当前版本已实现独立模型设置和 `/v1/models` 列表；侧聊仍是有限历史的模型调用，尚未接入下述 Agent 服务。
+当前实现采用 **Pi Coding Agent SDK 1.5.0 + billion-context 0.1.213**。原生侧聊通过认证的本机服务运行 Agent，工作区会话与工具循环由 SDK 管理。启动方式见 [README](../README.md#安装与启动)。
 
-目标是让侧聊具备 Coding Agent 的工具循环、多个工作区的上下文、HC 窗口观察、持久对话与自动上下文压缩。
+## 选型依据
 
-## 候选
-
-| 候选 | 与本项目相关的能力 | 接入取舍 |
+| 候选 | 适合本项目的能力 | 取舍 |
 | --- | --- | --- |
-| **Pi SDK** | TypeScript 嵌入；持久 SessionManager；自定义工具、skills、模型；自动与手动 compaction；旧会话条目仍保留 | 首选。适合由 Sulan 控制工作区、HC 工具和流式原生界面，需要一个同机 Node/Bun 服务承载 SDK |
-| **OpenCode SDK** | TypeScript 客户端与后台服务；工作目录、会话、消息、工具；自动 compaction | 次选。服务接口现成；接入需锁定 SDK 与后台服务的匹配版本，并配置 HC 工具或插件 |
-| **Vercel AI SDK / ToolLoopAgent** | 灵活的 JS/TS 工具调用循环、模型适配与流式输出 | 适合希望自行组织 Agent 的项目。文件与终端工具、持久会话、上下文压缩策略需要组合设计；本项目接入工作更多 |
-| **Claude Agent SDK** | 将 Claude Code 的代码库理解、文件编辑、命令执行等能力用于应用 | Claude 生态为主时值得考虑。项目需要多模型网关，因此模型与端点兼容性要单独验证 |
+| **Pi SDK** | JS/TS 嵌入、持久会话、编码工具、自定义工具、skills 和压缩扩展 | 已采用，便于控制工作区、HC 接口和原生界面 |
+| **OpenCode SDK** | 后台服务、会话与消息 API、工具、自动 compaction | 可作为后续适配候选，需要匹配 SDK 与服务版本 |
+| **Vercel AI SDK / ToolLoopAgent** | 灵活的工具循环、模型接入与流式输出 | 会话持久化、编码工具与上下文策略需额外组合 |
+| **Claude Agent SDK** | Claude Code 的代码理解、编辑与命令能力 | Claude 生态为主时合适，多模型网关兼容性需验证 |
 
-这是基于已核对的 SDK 与官方文档的接入判断，并非不同 Agent 的实测效果排名。
+这是功能与接入成本的判断，未对各 Agent 的实际任务效果做排名。
 
-## 建议结构
+## 实现结构
 
 ```text
-Sulan 原生侧栏
-  └─ 同机 Agent 服务：Pi SDK
-       ├─ 工作区 / 持久会话注册表
-       ├─ HC 工具：窗口列表、状态、有限读屏
-       ├─ 历史适配器：按 Agent 类型读取持久会话与工具输出
-       ├─ 模型网关：设置页选择的模型与服务配置
-       └─ Compaction：结构化摘要 + 近期对话 + 历史引用
+Sulan GPUI 侧栏
+  └─ 认证的本机任务 RPC
+       └─ Pi Session（按工作区隔离）
+            ├─ 编码工具：读取、搜索、命令、编辑
+            ├─ HC 工具：工作区、窗口、有限终端资料
+            ├─ 历史工具：Pi JSONL 检索与字节游标回读
+            └─ billion-context 进程内扩展 → 配置的模型网关
 ```
 
-完整 Node/Bun Agent SDK 应由服务运行。Herdr Mod 保持 GPUI 界面，通过事件流显示回答、工具执行、压缩和错误状态。
+- [原生客户端](../mods/sulan/agent-client.js) 使用开始、观察、停止、清空接口；一个 500ms 定时器读取活动任务状态。
+- [HTTP 服务](../agent/server.js) 仅监听 loopback，使用私有 Bearer 令牌和来源检查。
+- [任务管理](../agent/service.js) 记录稳定请求 ID 与恢复日志，完成请求在重启后恢复时不会再次执行工具。状态不明的旧任务需要手动重试。
+- [SDK 运行时](../agent/runtime.js) 把工作区目录、所选模型和工具绑定到独立的持久会话。
 
-一个工作区绑定明确的默认 `cwd` 和独立会话，切换工作区恢复其对应的会话。跨工作区调查通过显式工具参数读取其他工作区的资料，并保留来源；不把所有项目的完整历史预先塞入当前对话。
+工作区隔离键包括 Space ID 与规范化目录。不同工作区保存各自的对话；同一个目录同时只运行一个侧聊任务，避免多个写入者。切换界面不终止已接受的后台任务，返回后继续观察。清空会创建新会话，旧档案保留用于回读。
 
-## HC Skill 与历史读取
+## HC Skill 与会话证据
 
-建议给 Agent 注册结构化工具，并配一份说明 HC 地址、工作区归属、输出局限和证据引用方式的 Skill：
+[hc-project-context Skill](../agent/skills/hc-project-context/SKILL.md) 配合以下结构化工具：
 
-- `list_workspaces`：列出可访问的工作区。
-- `list_windows(workspaceId)`：列出窗口、终端地址、Agent 类型和状态。
-- `read_window(workspaceId, terminalId, lines)`：读取有限终端输出，返回完整性标记。
-- `search_agent_history(workspaceId, query)`：查找相关历史片段及来源。
-- `read_agent_history(sessionId, cursor, limit)`：按需回读完整会话中的相应范围。
-- 文件读取、搜索、运行命令等 Coding 工具使用明确的目标工作区；观察其他 Agent 与执行新任务是不同的操作。
+| 工具 | 用途 |
+| --- | --- |
+| `hc_workspaces` | 列出应用登记的工作区 |
+| `hc_windows` | 列出指定工作区的窗口、终端地址和状态 |
+| `hc_read` | 用固定 CLI 参数读取允许的终端，保留 HC 的不完整标记 |
+| `agent_sessions` | 列出登记目录中的 Pi 持久会话 |
+| `agent_history_search` | 搜索限定范围并返回来源、游标与覆盖范围 |
+| `agent_history` | 按字节游标回读记录，并给出下一页位置 |
 
-HC 当前手册说明：`hc read` 可读屏幕和历史；当终端状态为 working、blocked 或 error 时，历史读取只返回屏幕，并标记不完整。因此完整对话应由各 Agent 的持久化会话适配器提供，终端可见历史和会话记录分别保留来源。
+HC 在终端 working、blocked 或 error 时可能只提供当前屏幕。完整历史适配器目前覆盖本机 **Pi JSONL**；Claude、OpenCode 等其他 Agent 当前只提供 HC 可见的终端资料。远程终端可通过 HC 地址观察，SDK 的工作目录与编码执行目前使用本机目录。
 
-第一阶段可以只实现 Pi 会话适配器，再扩展 OpenCode、Claude 等格式。找不到会话记录时，回答应说明资料仅来自终端输出。
+[历史读取器](../agent/session-history.js) 只读取有限文件头来建立目录，并流式读取所需记录。搜索默认覆盖最近 50 个相关会话、每个最近 4MB，可继续向前分页。结果保留截断信息；一个有限范围没有匹配，不代表整个历史没有相应事实。
 
-## Auto Compaction
+## billion-context
 
-Pi 内置压缩会追加摘要条目、保留近期消息，并保留原始持久记录。本项目需要在这个机制上定义适合跨窗口调查的摘要内容：
+服务显式加载包内的 `dist/agent/pi-native.js`，采用进程内模式。包根入口属于其他客户端，不能作为 Pi 扩展直接导入。扩展状态按 Pi 持久会话 ID 管理，提供 `compress`、`decompress`、`search_context`、`acp_status` 等工具。
 
-- 当前目标、用户决策、约束和下一步。
-- 每个工作区与 Agent 的进展、尚未解决的问题。
-- 已执行的工具操作及已验证与待验证的结论。
-- 工作区 ID、终端地址、Agent session ID、历史游标或文件位置，供以后回读。
+Pi 保留内建压缩机制；billion-context 确认当前会话已由其承载时，通过 ownership hook 抑制重复的自动压缩。`--native-context` 可显式切回 Pi 内建模式。服务只加载指定扩展和 HC Skill，不改当前用户的全局 Pi 配置；bili 内置子代理功能关闭。
 
-压缩前应给后续工具结果和回答预留空间。模型配置需读取或补齐实际 `contextWindow`、最大输出与工具能力；`/v1/models` 返回的 ID 列表不能单独决定这些阈值。压缩失败或中断应保留原记录并可重试，界面显示当前状态。
+压缩摘要应保留目标、用户决定、尚未解决的问题、已执行操作，以及工作区、终端、会话和字节游标。需要精确细节时使用上下文搜索、解压或原始 Pi 历史回读。
 
-验收需要一个超过上下文阈值的真实长会话：经历压缩、应用重启和工作区切换后，仍能找回先前决策与引用，并区分终端输出和完整 Agent 历史。现阶段尚未执行这个 Agent 级验收。
+每轮完成或中断后，服务通过公开的 checkpoint API 确认内存中的压缩状态已写入，再删除这次临时 checkpoint。这个确认步骤处理了 inline 模式下 500ms 延迟写盘与快速进程退出的竞争；不会积累快照。确认失败时保留已完成的编码结果并提示，不自动重放工具操作。
+
+模型 ID 列表不等于上下文能力声明。当前使用保守的 32,768-token 默认值，可通过 `SULAN_AGENT_CONTEXT_WINDOW` 根据实际模型配置。`billion-context.json` 位于服务自己的数据目录，独立保存压缩参数。
+
+## 验证范围
+
+[服务与历史回归](../test/agent.test.js) 覆盖认证、恢复不重放、停止、清空、目录范围、终端参数和流式历史游标。
+
+原生验证使用真实 Herdr 窗口、实际 Pi SDK / billion-context，以及本地确定性 SSE 模型端点：完成工具调用，在任务处理中重启窗口，重启服务后继续同一 SDK 会话。
+
+[跨进程集成回归](../test/sdk-context.test.js) 确认旧 HC 工具输出被折叠、关键摘要保留、退出后全新进程继续使用该压缩状态、解压恢复原始细节，以及两个并行工作区之间不混入彼此的记忆。固定模拟模型驱动实际 SDK 和扩展，存储参数仅在测试中缩小以触发有限规模的压缩。
+
+[真实 HTTP 回归](../test/fixtures/sdk-http.js) 同时覆盖 Anthropic 与 OpenAI 兼容接口：保留代理路径前缀、应用选定思考参数、允许 API Key 留空，并验证匿名请求不会继承环境中的凭据。认证头由对应协议客户端构造，匿名模式通过 SDK 请求钩子显式省略。
+
+这些测试不会调用付费模型，也不构成真实月级会话、数十亿 token 或固定节省倍数的质量基准。
 
 ## 资料
 
-- [Pi SDK](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sdk.md) 与 [Compaction Reference](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/compaction.md)。实现机制同时核对了本机安装的 Pi 1.5.0 文档。
-- [OpenCode SDK](https://opencode.ai/docs/sdk/) 与 [Compaction](https://opencode.ai/docs/compaction/)。
-- [Vercel AI SDK Agents Overview](https://ai-sdk.dev/docs/agents/overview)。
-- [Claude Agent SDK 官方 TypeScript 仓库](https://github.com/anthropics/claude-agent-sdk-typescript)。
-- HC 的行为依据当前安装版本的 `hc --skill` 手册；实现时继续以目标机器的 CLI 帮助为准。
+- [Pi SDK](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sdk.md) 与 [Compaction Reference](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/compaction.md)
+- [billion-context](https://github.com/ranxianglei/billion-context) 与 [Pi 客户端文档](https://github.com/ranxianglei/billion-context/blob/master/docs/clients.md#pi-pidev-coding-agent)
+- [OpenCode SDK](https://opencode.ai/docs/sdk/) 与 [Compaction](https://opencode.ai/docs/compaction/)
+- [Vercel AI SDK Agents Overview](https://ai-sdk.dev/docs/agents/overview)
+- [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript)
+- HC 行为以目标机器的 `hc --skill` 与子命令帮助为准。

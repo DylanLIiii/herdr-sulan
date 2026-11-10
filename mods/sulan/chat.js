@@ -141,7 +141,15 @@ export function cleanTurns(value) {
     .slice(-MAX_TURNS)
     .map((turn) => ({
       question: turn.question.slice(0, MAX_QUESTION),
-      ...(turn.answer === null ? { answer: null } : replyFields(turn.answer, MAX_ANSWER)),
+      ...(typeof turn.id === 'string' ? { id: turn.id.slice(0, 160) } : {}),
+      ...(turn.agent ? { agent: true } : {}),
+      ...(turn.incomplete ? { incomplete: true } : {}),
+      ...(typeof turn.sessionId === 'string' ? { sessionId: turn.sessionId.slice(0, 160) } : {}),
+      ...(Array.isArray(turn.tools) ? { tools: turn.tools.slice(-12).filter(tool => typeof tool?.name === 'string').map(tool => ({
+        name: tool.name.slice(0, 80), label: String(tool.label || tool.name).slice(0, 120),
+        status: ['running', 'complete', 'error', 'cancelled'].includes(tool.status) ? tool.status : 'complete',
+      })) } : {}),
+      ...(turn.answer === null ? { answer: null } : replyFields(turn.answer, turn.agent ? 16000 : MAX_ANSWER)),
       ...(typeof turn.thinking === 'string' && turn.thinking
         ? {
             thinking: turn.thinking.slice(0, MAX_THINKING + 30),

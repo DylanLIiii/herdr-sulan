@@ -284,14 +284,14 @@ test('completeModel supports both Anthropic /v1/messages and OpenAI /v1/chat/com
 test('installSulan writes layouts and mods without overwriting existing files', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'herdr-sulan-install-'))
   try {
-    const res = await installSulan({ home: dir, name: 'sulan-custom', endpoint: 'http://127.0.0.1:3425/v1/messages' })
+    const res = await installSulan({ home: dir, name: 'sulan-custom', endpoint: 'http://127.0.0.1:3425/v1/messages', agentConnection: null })
     const layoutJson = JSON.parse(await readFile(res.layoutPath, 'utf8'))
     assert.equal(layoutJson.preview, 'layouts/sulan-custom.svg')
     const workNode = layoutJson.children.find((n) => n.id === 'work')
     const tabsNode = workNode.children.find((n) => n.id === 'tabs')
     assert.equal(tabsNode.content.mod, 'sulan-custom')
     assert.equal(tabsNode.content.props.role, 'tabs')
-    await assert.rejects(() => installSulan({ home: dir, name: 'sulan-custom' }), /Already exists/)
+    await assert.rejects(() => installSulan({ home: dir, name: 'sulan-custom', agentConnection: null }), /Already exists/)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

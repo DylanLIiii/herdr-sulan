@@ -7,11 +7,12 @@ import { parseSummary } from './summary.js'
 import { prepareBrief } from './brief.js'
 import { activeProject, gatherProjectSnapshot, buildInstantSummary } from './context.js'
 import { MAX_QUESTION, MAX_ANSWER, MAX_TURNS, cleanTurns, replyFields, splitReply,
-  summarySystemPrompt, summaryUserPrompt, sideChatPrompt } from './chat.js'
+  summarySystemPrompt, summaryUserPrompt } from './chat.js'
 import { completeModel } from './llm.js'
 import { resolveModelSettings, validateModelSettings } from './model-settings.js'
 import { modelSettingsView } from './settings-view.js'
 import { fetchModels } from './models.js'
+import { agentWorkspaces, validateAgentConnection, startAgentTurn, readAgentJob, stopAgentTurn, resetAgentSession } from './agent-client.js'
 import { DEMO_PROJECTS } from './demo.js'
 import { action, summaryView, chatView } from './view.js'
 import { findNode, renderWorkspaceTabs } from './workspace.js'
@@ -70,6 +71,14 @@ export default class Sulan extends View {
     this.chatRunning = false
     this.chatStatus = ''
     this.chatError = false
+    this.agentJob = null
+    this.agentStarting = null
+    this.agentResumePending = null
+    this.agentPollingId = null
+    this.chatStopping = false
+    this.chatResetting = false
+    this.clientInstance = Math.random().toString(36).slice(2, 10)
+    this.expandedTools = new Set()
     this.turns = []
     this.draft = ''
     this.typing = false
@@ -88,16 +97,28 @@ export default class Sulan extends View {
         // Native text editing owns its own redraw. Only invalidate the outer
         // sidebar when the Send button changes between enabled and disabled.
         if (wasEmpty !== !this.draft.trim()) cx.notify()
+        if (this.projectKey && !this.projectKey.startsWith('demo:')) {
+          const version = (this.draftSaveEpoch || 0) + 1, key = this.projectKey
+          this.draftSaveEpoch = version
+          cx.timer.after(200, () => { if (!this.closed && version === this.draftSaveEpoch && key === this.projectKey) this.persistCurrentSpace() })
+        }
       })
       this.input.on('submit', (event, cx) => { if (event?.secondary) this.submitChat(cx) })
       this.input.on('focus', (_e, cx) => { this.typing = true; cx.notify() })
-      this.input.on('blur', (_e, cx) => { this.typing = false; cx.notify() })
+      this.input.on('blur', (_e, cx) => { this.typing = false; this.persistCurrentSpace(); cx.notify() })
       this.syncProject()
       this.refresh(cx)
       cx.timer.every(250, cx => {
         if (!this.closed && this.currentSpaceKey() !== this.projectKey) {
           this.syncProject(); this.refresh(cx); cx.notify()
         }
+      })
+      cx.timer.every(500, cx => {
+        if (this.closed) return
+        if (this.agentResumePending && !this.chatRunning) {
+          const pending = this.agentResumePending; this.agentResumePending = null
+          this.runChatTurn(cx, { resume: true, connection: pending.connection })
+        } else this.pollAgent(cx)
       })
       cx.timer.every(10000, cx => {
         if (!this.closed && !this.paused && this.visible() && !this.busy()) this.refresh(cx, { silent: true })
@@ -120,7 +141,7 @@ export default class Sulan extends View {
   }
 
   busy() { return this.loadingContext || this.summarizing }
-  close() { this.closed = true; this.generation++; this.chatEpoch++; this.modelsEpoch++ }
+  close() { this.persistCurrentSpace(); this.closed = true; this.generation++; this.chatEpoch++; this.modelsEpoch++ }
   visible() {
     const root = layout(), panel = findNode(root, 'panel'), body = findNode(root, 'panel-body')
     return !(panel && findNode(body, 'sulan') && (panel.hidden || body.active !== 'sulan'))
@@ -138,6 +159,8 @@ export default class Sulan extends View {
     this.generation++; this.chatEpoch++
     this.loadingContext = false; this.summarizing = false; this.queuedAi = false; this.paused = false
     this.chatRunning = false; this.chatStatus = ''; this.chatError = false
+    this.agentJob = null; this.agentStarting = null; this.agentResumePending = null; this.chatStopping = false; this.chatResetting = false
+    this.expandedTools.clear()
     this.detailsOpen = false; this.historyOpen = false; this.confirmClear = false
     this.expandedThinking.clear()
     const demo = this.mode === 'demo' ? DEMO_PROJECTS[0] : null
@@ -146,6 +169,9 @@ export default class Sulan extends View {
     this.snapshot = demo ? { project: demo.project, agents: demo.agents, contextText: demo.summary, capturedAt: Date.now() } : null
     this.setSummary(cached.summary || '', demo ? 'demo' : cached.summarySource || '', cached.updatedAt || 0)
     this.turns = cleanTurns(cached.turns)
+    if (cached.agentJob?.id && this.turns.some(turn => turn.id === cached.agentJob.turnId)) {
+      this.agentJob = { ...cached.agentJob, key }; this.chatRunning = true
+    } else if (cached.agentPending?.turnId && this.turns.some(turn => turn.id === cached.agentPending.turnId)) this.agentResumePending = cached.agentPending
     this.draft = typeof cached.draft === 'string' ? cached.draft : ''
     this.input?.set_value(this.draft)
     this.note = ''; this.isError = false
@@ -153,20 +179,22 @@ export default class Sulan extends View {
   persistCurrentSpace() {
     if (!this.projectKey || this.projectKey.startsWith('demo:')) return
     save(this.projectKey, { summary: this.summary, summarySource: this.summarySource, updatedAt: this.updatedAt,
-      turns: this.turns, draft: this.draft })
+      turns: this.turns, draft: this.draft,
+      agentJob: this.agentJob ? { id: this.agentJob.id, turnId: this.agentJob.turnId, connection: this.agentJob.connection } : null,
+      agentPending: this.agentStarting ? { turnId: this.agentStarting.turnId, connection: this.agentStarting.connection } : this.agentResumePending })
   }
   savePanelPrefs() { save('space.panels', this.spacePanels) }
   modelConfiguration() {
     return { summaryModel: this.summaryModel, chatModel: this.chatModel, chatEffort: this.chatEffort,
-      endpoint: this.endpoint, apiKey: this.apiKey }
+      endpoint: this.endpoint, apiKey: this.apiKey, agentEndpoint: this.agentEndpoint, agentToken: this.agentToken }
   }
   persistPrefs() { return save('prefs', this.modelConfiguration()) }
   openSettings(cx) {
     if (this.role === 'tabs' || this.page === 'settings') return
     if (!this.settingsInputs) {
       this.settingsInputs = {}
-      for (const key of ['summaryModel', 'chatModel', 'endpoint', 'apiKey']) {
-        const state = InputState.new({ placeholder: key === 'endpoint' ? 'https://gateway/v1/messages' : key === 'apiKey' ? '可留空' : '模型名称或完整路由' })
+      for (const key of ['summaryModel', 'chatModel', 'endpoint', 'apiKey', 'agentEndpoint', 'agentToken']) {
+        const state = InputState.new({ placeholder: key === 'agentEndpoint' ? 'http://127.0.0.1:3426' : key === 'agentToken' ? '由布局自动配置，也可手动填写' : key === 'endpoint' ? 'https://gateway/v1/messages' : key === 'apiKey' ? '可留空' : '模型名称或完整路由' })
         state.on('change', (_event, cx) => {
           if (this.settingsError) { this.settingsError = ''; cx.notify() }
           if ((key === 'endpoint' || key === 'apiKey') && this.page === 'settings') this.invalidateModels(cx)
@@ -174,6 +202,7 @@ export default class Sulan extends View {
         this.settingsInputs[key] = state
       }
       this.settingsInputs.apiKey.set_masked(true)
+      this.settingsInputs.agentToken.set_masked(true)
       this.modelSearchInput = InputState.new({ placeholder: '搜索模型名称或路由…' })
       this.modelSearchInput.on('change', (_event, cx) => { this.modelQuery = this.modelSearchInput.value(); cx.notify() })
     }
@@ -319,62 +348,172 @@ export default class Sulan extends View {
     this.mode = mode; this.syncProject(); this.refresh(cx); cx.notify()
   }
   submitChat(cx, question = null) {
-    if (this.chatRunning) return
+    if (this.chatRunning || this.agentJob || this.agentResumePending || this.chatResetting) return
     const text = String(question ?? this.draft).trim()
     if (!text || text.length > MAX_QUESTION) {
       this.chatStatus = text ? `问题请控制在 ${MAX_QUESTION} 字符以内。` : '先写下你的问题。'
       this.chatError = true; cx.notify(); return
     }
-    this.turns = [...this.turns, { question: text, answer: null }].slice(-MAX_TURNS)
+    this.turns = [...this.turns, { id: `${Date.now().toString(36)}-${this.clientInstance}-${this.chatEpoch}`, question: text, answer: null }].slice(-MAX_TURNS)
     this.draft = ''; this.input.set_value(''); this.confirmClear = false; this.historyOpen = false
     this.persistCurrentSpace(); this.runChatTurn(cx)
   }
-  runChatTurn(cx) {
+  agentConnection() { return { agentEndpoint: this.agentEndpoint, agentToken: this.agentToken } }
+  workspaceSnapshot() { return agentWorkspaces(spaces(), panes(), agents(), terminals()) }
+  agentReply(turn, data) {
+    if (data.text) Object.assign(turn, replyFields(data.text, 16000))
+    if (data.thinking) { turn.thinking = data.thinking.slice(0, 4000); turn.thinkingKind = 'tagged' }
+    turn.agent = true; turn.incomplete = data.status !== 'complete'
+    turn.tools = (data.tools || []).slice(-12)
+    if (data.sessionId) turn.sessionId = data.sessionId
+  }
+  runChatTurn(cx, { resume = false, connection: override = null } = {}) {
     const turn = this.turns.at(-1)
-    if (this.chatRunning || !turn || turn.answer !== null) return
+    if (this.chatRunning || !turn || (turn.answer !== null && !turn.incomplete)) return
+    if (this.mode === 'demo') {
+      Object.assign(turn, replyFields(DEMO_PROJECTS[0].turns[0].answer, MAX_ANSWER))
+      this.chatError = false; this.chatStatus = ''; this.persistCurrentSpace(); cx.notify(); return
+    }
+    let connection
+    try {
+      connection = validateAgentConnection(override || this.agentConnection())
+      if (!connection.agentToken) throw new Error('请先运行 npm run agent，再安装新版布局以自动配置 Agent 连接令牌。')
+    } catch (error) { this.chatError = true; this.chatStatus = error.message; turn.incomplete = true; this.persistCurrentSpace(); cx.notify(); return }
+    const retry = !resume && Boolean(turn.incomplete || this.chatError)
     const epoch = ++this.chatEpoch, key = this.projectKey
-    const modelConfig = { endpoint: this.endpoint, apiKey: this.apiKey, model: this.chatModel, effort: this.chatEffort }
-    this.chatRunning = true; this.chatError = false; this.chatStatus = ''
+    turn.id ||= `${Date.now().toString(36)}-${this.clientInstance}-${epoch}`
+    this.chatRunning = true; this.chatError = false; this.chatStatus = '正在连接 Pi Agent…'
+    if (this.agentJob?.turnId === turn.id) { this.pollAgent(cx); cx.notify(); return }
+    const starting = { turnId: turn.id, connection, cancelled: false }
+    this.agentStarting = starting; turn.agent = true; turn.incomplete = true
     const current = () => !this.closed && epoch === this.chatEpoch && key === this.projectKey
-    cx.timer.after(60000, cx => {
-      if (!current() || !this.chatRunning) return
-      this.chatEpoch++; this.chatRunning = false; this.chatError = true
-      this.chatStatus = '回复等待过久，可以重试或换一个模型。'; this.persistCurrentSpace(); cx.notify()
+    const body = { workspaceId: String(this.project?.id || ''), workspaces: this.workspaceSnapshot(), question: turn.question,
+      brief: this.summary, clientTurnId: turn.id, retry,
+      config: { endpoint: this.endpoint, apiKey: this.apiKey, model: this.chatModel, effort: this.chatEffort } }
+    this.persistCurrentSpace(); cx.notify()
+    cx.timer.after(20000, cx => {
+      if (!current() || this.agentStarting !== starting) return
+      starting.cancelled = true; this.agentStarting = null; this.chatEpoch++; this.chatRunning = false
+      this.chatError = true; this.chatStatus = 'Agent 连接等待过久，请检查服务后手动重试。'; this.persistCurrentSpace(); cx.notify()
     })
-    cx.notify()
     cx.spawn(async cx => {
       try {
-        let reply
-        if (this.mode === 'demo') reply = DEMO_PROJECTS[0].turns[0].answer
-        else {
-          const snapshot = this.snapshot && Date.now() - this.snapshot.capturedAt < 30000 ? this.snapshot : await this.contextRequest()
-          if (!current()) return
-          reply = await completeModel({ ...modelConfig,
-            system: '你是项目侧聊助手。先用一句话回答，再用简短 Markdown 解释；普通正文不要全加粗。不执行工具。资料不足时直说，不编造进展或需要用户决定的问题。',
-            prompt: sideChatPrompt(this.turns, this.summary, snapshot?.contextText || ''), maxTokens: 2500 })
+        const data = await startAgentTurn(connection, body)
+        if (!current()) {
+          if (starting.cancelled) { if (data.status === 'running') await stopAgentTurn(connection, data.id).catch(() => {}) }
+          else this.retainDetachedJob(key, turn.id, connection, data, cx)
+          return
         }
-        if (!current()) return
-        const fields = replyFields(reply, MAX_ANSWER)
-        Object.assign(turn, fields)
-        if (!fields.answer) throw new Error('模型未返回最终回答，可以重试或切换模型。')
+        this.agentStarting = null
+        this.agentJob = { id: data.id, turnId: turn.id, connection, key }
+        this.acceptAgentSnapshot(data, cx)
+        this.persistCurrentSpace(); this.pollAgent(cx)
       } catch (error) {
         if (!current()) return
-        this.chatStatus = '暂时未能回答：' + String(error?.message || error).slice(0, 140)
-        this.chatError = true
-      } finally {
-        if (current()) { this.chatRunning = false; this.persistCurrentSpace(); cx.notify() }
+        this.agentStarting = null; this.chatRunning = false; this.chatError = true
+        this.chatStatus = String(error.message || error).slice(0, 300)
+        if ([400, 401, 403].includes(error.status)) turn.agent = false
+        this.persistCurrentSpace(); cx.notify()
       }
     })
   }
+  retainDetachedJob(key, turnId, connection, data, cx) {
+    const cache = load(key)
+    const turn = cache?.turns?.find(turn => turn.id === turnId)
+    if (!turn) return
+    this.agentReply(turn, data)
+    cache.agentPending = null
+    cache.agentJob = data.status === 'running' ? { id: data.id, turnId, connection } : null
+    save(key, cache)
+    if (!this.closed && key === this.projectKey && this.turns.at(-1)?.id === turnId && !this.agentStarting && !this.agentJob) {
+      this.agentResumePending = null; this.agentJob = { id: data.id, turnId, connection, key }
+      this.acceptAgentSnapshot(data, cx); this.persistCurrentSpace()
+    }
+  }
+  acceptAgentSnapshot(data, cx) {
+    const job = this.agentJob
+    if (!job || job.id !== data.id || job.key !== this.projectKey) return
+    const turn = this.turns.find(turn => turn.id === job.turnId)
+    if (!turn) return
+    const signature = JSON.stringify([data.status, data.text, data.thinking, data.tools, data.statusMessage, data.error])
+    if (job.signature === signature) return
+    job.signature = signature
+    this.agentReply(turn, data)
+    this.chatStatus = data.error || data.statusMessage || ''
+    this.chatError = data.status === 'error'
+    this.chatRunning = data.status === 'running'
+    if (!this.chatRunning) { this.agentJob = null; this.chatStopping = false }
+    if (!this.chatRunning || Date.now() - (job.savedAt || 0) >= 1000) { job.savedAt = Date.now(); this.persistCurrentSpace() }
+    cx.notify()
+  }
+  pollAgent(cx) {
+    const job = this.agentJob
+    if (this.closed || !job || !this.chatRunning || this.agentPollingId?.id === job.id) return
+    const epoch = this.chatEpoch, key = this.projectKey, polling = { id: job.id }
+    this.agentPollingId = polling
+    cx.timer.after(15000, cx => {
+      if (this.closed || this.agentPollingId !== polling || epoch !== this.chatEpoch || key !== this.projectKey || this.agentJob !== job) return
+      this.agentPollingId = null; this.chatRunning = false; this.chatError = true
+      this.chatStatus = 'Agent 服务响应较慢，可以重连以查看结果，或发送停止请求。'; this.persistCurrentSpace(); cx.notify()
+    })
+    cx.spawn(async cx => {
+      try {
+        const data = await readAgentJob(job.connection, job.id)
+        if (!this.closed && epoch === this.chatEpoch && key === this.projectKey && this.agentJob === job) this.acceptAgentSnapshot(data, cx)
+      } catch (error) {
+        if (this.closed || epoch !== this.chatEpoch || key !== this.projectKey || this.agentJob !== job) return
+        this.chatRunning = false; this.chatError = true; this.chatStatus = String(error.message || error).slice(0, 300)
+        if ([401, 404].includes(error.status)) this.agentJob = null
+        this.persistCurrentSpace(); cx.notify()
+      } finally { if (this.agentPollingId === polling) this.agentPollingId = null }
+    })
+  }
+  stopChat(cx) {
+    if (this.chatStopping) return
+    if (this.agentStarting) {
+      this.agentStarting.cancelled = true; this.agentStarting = null; this.chatEpoch++; this.chatRunning = false
+      this.chatStatus = '已停止等待；迟到的 Agent 请求会发送停止指令。'; this.persistCurrentSpace(); cx.notify(); return
+    }
+    const job = this.agentJob
+    if (!job) return
+    this.chatStopping = true; this.chatStatus = '正在停止 Agent…'; cx.notify()
+    cx.spawn(async cx => {
+      try {
+        const data = await stopAgentTurn(job.connection, job.id)
+        if (!this.closed && this.agentJob === job) this.acceptAgentSnapshot(data, cx)
+      } catch (error) {
+        if (this.closed || this.agentJob !== job) return
+        this.chatRunning = false; this.chatError = true; this.chatStatus = '停止请求未确认：' + String(error.message || error).slice(0, 220)
+      } finally { this.chatStopping = false; this.persistCurrentSpace(); if (!this.closed) cx.notify() }
+    })
+  }
   editLastQuestion(cx) {
-    if (this.chatRunning || this.turns.at(-1)?.answer !== null) return
+    const turn = this.turns.at(-1)
+    if (this.chatRunning || this.agentJob || !turn || (turn.answer !== null && !turn.incomplete)) return
     this.draft = this.turns.pop().question; this.input.set_value(this.draft)
     this.chatStatus = ''; this.chatError = false; this.persistCurrentSpace(); this.input.focus(); cx.notify()
   }
   clearChat(cx) {
     if (!this.confirmClear) { this.confirmClear = true; cx.notify(); return }
-    this.chatEpoch++; this.chatRunning = false; this.turns = []; this.chatStatus = ''; this.chatError = false
-    this.confirmClear = false; this.historyOpen = false; this.expandedThinking.clear(); this.persistCurrentSpace(); cx.notify()
+    if (this.chatResetting) return
+    const finish = cx => {
+      if (this.agentStarting) this.agentStarting.cancelled = true
+      this.chatEpoch++; this.chatRunning = false; this.agentJob = null; this.agentStarting = null; this.agentResumePending = null
+      this.turns = []; this.chatStatus = ''; this.chatError = false; this.confirmClear = false; this.chatResetting = false
+      this.historyOpen = false; this.expandedThinking.clear(); this.expandedTools.clear(); this.persistCurrentSpace(); cx.notify()
+    }
+    if (this.mode === 'demo' || !this.turns.some(turn => turn.agent)) { finish(cx); return }
+    const key = this.projectKey
+    this.chatResetting = true; cx.notify()
+    cx.spawn(async cx => {
+      try {
+        await resetAgentSession(this.agentConnection(), { workspaceId: String(this.project?.id || ''), workspaces: this.workspaceSnapshot() })
+        if (!this.closed && key === this.projectKey) finish(cx)
+      } catch (error) {
+        if (this.closed || key !== this.projectKey) return
+        this.chatResetting = false; this.chatError = true; this.chatStatus = '未能清空 Agent 会话：' + String(error.message || error).slice(0, 220); cx.notify()
+      }
+    })
   }
   copyLastAnswer(cx) {
     const text = [...this.turns].reverse().find(turn => turn.answer)?.answer

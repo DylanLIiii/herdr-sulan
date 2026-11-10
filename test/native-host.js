@@ -12,6 +12,7 @@ import * as demo from '../mods/sulan/demo.js'
 import * as brief from '../mods/sulan/brief.js'
 import * as modelSettings from '../mods/sulan/model-settings.js'
 import * as modelDiscovery from '../mods/sulan/models.js'
+import * as agentClient from '../mods/sulan/agent-client.js'
 
 export async function createHost(options = {}) {
   let source = await readFile(new URL('../mods/sulan/main.js', import.meta.url), 'utf8')
@@ -40,12 +41,21 @@ export async function createHost(options = {}) {
   const input = textState()
   const timers = []
   const commands = []
+  const agentRequests = []
+  const finishedJob = id => ({ id, status: 'complete', text: 'Agent 已读取项目资料。', thinking: '', tools: [], statusMessage: '' })
   const cx = { notify() {}, stop_propagation() {}, write_to_clipboard() {}, focus_handle: () => focus,
     timer: { every: (ms, callback) => timers.push({ ms, callback, kind: 'every' }), after: (ms, callback) => timers.push({ ms, callback, kind: 'after' }) },
     spawn(callback) { const task = callback(cx); task?.catch?.(error => { commands.push({ error }) }); return task },
   }
   const context = {
-    ...summary, ...diagram, ...text, ...chat, ...project, ...llm, ...demo, ...brief, ...modelSettings, ...modelDiscovery,
+    ...summary, ...diagram, ...text, ...chat, ...project, ...llm, ...demo, ...brief, ...modelSettings, ...modelDiscovery, ...agentClient,
+    startAgentTurn: async (connection, body) => {
+      agentRequests.push(body)
+      return options.startAgentTurn ? options.startAgentTurn(connection, body) : finishedJob('fixture-job')
+    },
+    readAgentJob: options.readAgentJob || (async (_connection, id) => finishedJob(id)),
+    stopAgentTurn: options.stopAgentTurn || (async (_connection, id) => ({ id, status: 'cancelled', text: '', tools: [], statusMessage: 'Agent 已停止。' })),
+    resetAgentSession: options.resetAgentSession || (async () => ({ ok: true })),
     fetchModels: options.fetchModels || (async () => []),
     completeModel: options.completeModel || llm.completeModel,
     View: class {}, div: () => element(), svg: () => element('svg'), image: () => element('image'),
@@ -78,6 +88,6 @@ export async function createHost(options = {}) {
   }
   vm.runInContext(source, sandbox)
   const mod = new context.Mod()
-  mod.init({ mode: 'demo', ...options.props }, cx)
-  return { mod, cx, metrics, timers, input, commands, storage }
+  mod.init({ mode: 'demo', agentToken: 'fixture-agent-token', ...options.props }, cx)
+  return { mod, cx, metrics, timers, input, commands, storage, agentRequests }
 }

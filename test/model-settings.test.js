@@ -5,11 +5,11 @@ import { resolveModelSettings, validateModelSettings } from '../mods/sulan/model
 
 const PREFS = 'herdr.sulan.v1:prefs'
 const endpoint = 'http://localhost:3425/v1/chat/completions'
-const values = { summaryModel: 'group/brief', chatModel: 'group/conversation', endpoint, apiKey: 'example-key', chatEffort: 'high' }
+const values = { summaryModel: 'group/brief', chatModel: 'group/conversation', endpoint, apiKey: 'example-key', chatEffort: 'high', agentEndpoint: 'http://127.0.0.1:3426', agentToken: 'example-agent-token' }
 const walk = node => !node || typeof node !== 'object' ? [] : [node, ...(node.nodes ?? []).flatMap(walk)]
 const flush = () => new Promise(setImmediate)
 const fill = (mod, config = values) => {
-  for (const key of ['summaryModel', 'chatModel', 'endpoint', 'apiKey']) mod.settingsInputs[key].set_value(config[key])
+  for (const key of ['summaryModel', 'chatModel', 'endpoint', 'apiKey', 'agentEndpoint', 'agentToken']) mod.settingsInputs[key].set_value(config[key])
   mod.settingsEffort = config.chatEffort
 }
 
@@ -23,6 +23,7 @@ test('settings page independently edits both models and masks the API key', asyn
   assert.ok(nodes.some(node => node.styles.id?.[0] === 'settings-chatModel'))
   assert.ok(!nodes.some(node => node.kind === 'markdown'), 'opening settings must not build the hidden brief or transcript')
   assert.equal(mod.settingsInputs.apiKey.masked, true)
+  assert.equal(mod.settingsInputs.agentToken.masked, true)
   const initial = mod.summaryModel
   fill(mod)
   mod.closeSettings(cx)
@@ -79,7 +80,8 @@ test('saving sends no completion request; summary and Side Chat subsequently use
   const requests = []
   const { mod, cx } = await createHost({ props: { mode: 'live' },
     spaces: [{ id: 'project', active: true, name: 'Project', folder: '/project', tabs: [] }],
-    completeModel: async config => { requests.push(config); return 'TLDR: 重点已整理\n## now\n- [done] 任务已完成' } })
+    completeModel: async config => { requests.push(config); return 'TLDR: 重点已整理\n## now\n- [done] 任务已完成' },
+    startAgentTurn: async (_connection, body) => { requests.push(body.config); return { id: 'selected-model-job', status: 'complete', text: 'Agent 回答。', tools: [] } } })
   await flush()
   mod.openSettings(cx); fill(mod); mod.saveSettings(cx)
   assert.equal(requests.length, 0)

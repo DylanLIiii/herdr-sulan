@@ -4,14 +4,23 @@
   "private": true,
   "description": "Native Herdr sidebar for project catch-up, agent activity, progress, and side chat",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/DylanLIiii/herdr-sulan.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DylanLIiii/herdr-sulan.git"
+  },
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.19.0"
   },
   "scripts": {
     "test": "node --test test/*.test.js",
     "check": "node scripts/check.js",
+    "agent": "node agent/server.js",
     "install-layout": "node scripts/install-layout.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "billion-context": "0.1.213",
+    "typebox": "1.3.27"
   }
 }

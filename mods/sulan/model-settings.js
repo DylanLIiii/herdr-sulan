@@ -1,6 +1,7 @@
 // Settings are per Mod copy and override layout-provided installation defaults.
 import { DEFAULT_ENDPOINT, DEFAULT_MODEL } from './llm.js'
 import { EFFORT_CHOICES } from './chat.js'
+import { DEFAULT_AGENT_ENDPOINT, validateAgentConnection } from './agent-client.js'
 
 const text = value => typeof value === 'string' ? value.trim() : ''
 export function resolveModelSettings(props = {}, saved = {}) {
@@ -10,6 +11,8 @@ export function resolveModelSettings(props = {}, saved = {}) {
     chatEffort: EFFORT_CHOICES.some(e => e.value === saved.chatEffort) ? saved.chatEffort : 'medium',
     endpoint: text(saved.endpoint) || text(props.endpoint) || DEFAULT_ENDPOINT,
     apiKey: typeof saved.apiKey === 'string' ? saved.apiKey : typeof props.apiKey === 'string' ? props.apiKey : 'magpie',
+    agentEndpoint: text(saved.agentEndpoint) || text(props.agentEndpoint) || DEFAULT_AGENT_ENDPOINT,
+    agentToken: typeof saved.agentToken === 'string' ? saved.agentToken : typeof props.agentToken === 'string' ? props.agentToken : '',
   }
 }
 
@@ -33,5 +36,6 @@ export function validateModelSettings(values) {
   }
   const endpoint = validateServiceEndpoint(values.endpoint)
   if (!EFFORT_CHOICES.some(e => e.value === values.chatEffort)) throw new Error('请选择有效的 Side Chat 思考深度。')
-  return { summaryModel, chatModel, endpoint, apiKey: typeof values.apiKey === 'string' ? values.apiKey.trim() : '', chatEffort: values.chatEffort }
+  return { summaryModel, chatModel, endpoint, apiKey: typeof values.apiKey === 'string' ? values.apiKey.trim() : '', chatEffort: values.chatEffort,
+    ...validateAgentConnection(values) }
 }

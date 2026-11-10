@@ -52,9 +52,21 @@ function exchange(view, turn, index, t) {
   item.child(v_flex().ml(24).p(12).gap(5).rounded(8).bg(t.raised)
     .child(div().text_size(11).text_color(t.muted).child('你'))
     .child(div().text_size(13).font_medium().line_height('21px').child(turn.question)))
-  item.child(div().text_size(11).font_medium().text_color(t.muted).child('Sulan'))
+  item.child(div().text_size(11).font_medium().text_color(t.muted).child(turn.agent ? '项目 Agent' : 'Sulan'))
+  if (turn.tools?.length) {
+    const open = view.expandedTools.has(index)
+    item.child(action(`chat-tools-${index}`, open ? '收起工具步骤' : '查看工具步骤', t, cx => {
+      if (open) view.expandedTools.delete(index); else view.expandedTools.add(index)
+      cx.notify()
+    }))
+    if (open) for (const tool of turn.tools) item.child(h_flex().gap(8).items_center()
+      .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(tool.label || tool.name))
+      .child(div().text_size(11).text_color(tool.status === 'error' ? t.blocked : t.muted).child(({ running: '执行中', complete: '完成', error: '失败', cancelled: '停止' })[tool.status] || '完成')))
+  }
   if (reply.answer) item.child(markdown(`chat-answer-${index}`, reply.answer, t))
-  else if (view.chatRunning && index === view.turns.length - 1) item.child(div().text_size(13).text_color(t.muted).child('正在结合项目重点回答…'))
+  else if (view.chatRunning && index === view.turns.length - 1) {
+    if (!view.chatStatus) item.child(div().text_size(13).text_color(t.muted).child('Agent 正在处理…'))
+  }
   else item.child(div().text_size(13).text_color(t.muted).child('尚未收到回答。可以重试，或编辑这个问题。'))
   if (reply.thinking) {
     const open = view.expandedThinking.has(index)
@@ -71,7 +83,7 @@ export function chatView(view, t) {
   const content = v_flex().min_w(0).gap(18)
   if (!view.turns.length) {
     content.child(div().text_size(18).font_semibold().child('围绕重点，继续追问'))
-      .child(div().text_size(13).line_height('21px').text_color(t.muted).child('带着项目上下文回答，先给结论，再解释原因。'))
+      .child(div().text_size(13).line_height('21px').text_color(t.muted).child('项目 Agent 可以按需读取窗口与会话历史，先给结论，再解释证据。'))
     for (const [index, [title, question]] of SUGGESTIONS.entries()) {
       content.child(action(`chat-suggestion-${index}`, title, t, cx => view.submitChat(cx, question)))
     }
@@ -86,21 +98,22 @@ export function chatView(view, t) {
   if (view.chatStatus) content.child(div().text_size(12).line_height('19px').text_color(view.chatError ? t.blocked : t.muted).child(view.chatStatus))
   const root = v_flex().flex_1().min_h(0).child(scroller('sulan-chat-scroll', content))
   const composer = v_flex().flex_none().px(14).pt(10).pb(12).gap(8).border_t(1).border_color(t.border)
-  if (view.turns.at(-1)?.answer === null && !view.chatRunning) composer.child(h_flex().gap(6)
-    .child(action('chat-retry', '重试', t, cx => view.runChatTurn(cx)))
-    .child(action('chat-edit', '编辑问题', t, cx => view.editLastQuestion(cx))))
+  if (view.turns.length && !view.chatRunning && (view.turns.at(-1)?.answer === null || view.turns.at(-1)?.incomplete)) composer.child(h_flex().gap(6)
+    .child(action('chat-retry', view.agentJob ? '重连' : '重试', t, cx => view.runChatTurn(cx)))
+    .child(action('chat-edit', '编辑问题', t, cx => view.editLastQuestion(cx), { disabled: Boolean(view.agentJob) })))
   const input = v_flex().p(10).gap(6).rounded(8).bg(t.surface).border_1().border_color(view.typing ? t.accent : t.input)
     .on_mouse_down('left', (_e, cx) => { view.input.focus(); cx.stop_propagation() })
     .child(Textarea.new(view.input).w_full().h(58).text_size(13).font_normal().text_color(t.foreground))
     .child(h_flex().items_center().justify_between()
       .child(div().text_size(11).text_color(t.muted).child('Ctrl / ⌘ + Enter 发送'))
-      .child(action('chat-send', view.chatRunning ? '回答中…' : '发送', t, cx => view.submitChat(cx), { primary: true, disabled: view.chatRunning || !view.draft.trim() })))
+      .when(Boolean(view.chatRunning || view.agentJob), el => el.child(action('chat-stop', '停止', t, cx => view.stopChat(cx), { disabled: Boolean(view.chatStopping) })))
+      .child(action('chat-send', view.chatRunning ? '处理中…' : '发送', t, cx => view.submitChat(cx), { primary: true, disabled: view.chatRunning || Boolean(view.agentJob || view.agentResumePending || view.chatResetting) || !view.draft.trim() })))
   composer.child(input)
   composer.child(h_flex().items_center().gap(5)
     .child(action('chat-settings', '模型设置', t, cx => view.openSettings(cx)))
     .child(div().flex_1())
     .when(Boolean(view.turns.length), el => el.child(action('chat-copy', '复制', t, cx => view.copyLastAnswer(cx), { disabled: !view.turns.some(turn => turn.answer) }))
-      .child(action('chat-clear', view.confirmClear ? '确认清空' : '清空', t, cx => view.clearChat(cx))))
+      .child(action('chat-clear', view.chatResetting ? '清空中…' : view.confirmClear ? '确认清空' : '清空', t, cx => view.clearChat(cx), { disabled: Boolean(view.chatResetting) })))
     .when(view.confirmClear, el => el.child(action('chat-clear-cancel', '取消', t, cx => { view.confirmClear = false; cx.notify() }))))
   return root.child(composer)
 }

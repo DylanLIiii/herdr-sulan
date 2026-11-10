@@ -12,7 +12,7 @@ async function checkDir(dir) {
   }
 }
 
-for (const dir of ['mods', 'scripts', 'test']) {
+for (const dir of ['mods', 'scripts', 'agent', 'test']) {
   await checkDir(dir)
 }
 console.log('JavaScript syntax checks passed.')
