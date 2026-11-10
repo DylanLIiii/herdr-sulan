@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { readFile, realpath, stat } from 'node:fs/promises'
+import { readFile, realpath, stat, mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { privateJson, workspaceKey } from './paths.js'
 
@@ -24,12 +24,16 @@ export class AgentService {
     const next = new Map()
     for (const entry of input) {
       if (typeof entry?.id !== 'string' || !entry.id || typeof entry.folder !== 'string' || !entry.folder) continue
-      const folder = await realpath(entry.folder).catch(() => path.resolve(entry.folder))
-      next.set(entry.id, { id: entry.id.slice(0, 240), name: String(entry.name || '工作区').slice(0, 120), folder,
-        machine: entry.machine || null, windows: (Array.isArray(entry.windows) ? entry.windows : []).slice(0, 200)
+      const machine = typeof entry.machine === 'string' ? entry.machine : null
+      const remote = machine && machine !== 'local'
+      const folder = remote ? entry.folder : await realpath(entry.folder).catch(() => path.resolve(entry.folder))
+      const item = { id: entry.id.slice(0, 240), name: String(entry.name || '工作区').slice(0, 120), folder,
+        machine, windows: (Array.isArray(entry.windows) ? entry.windows : []).slice(0, 200)
           .filter(window => typeof window?.address === 'string' && window.address.length < 240)
           .map(window => ({ address: window.address, name: String(window.name || '终端').slice(0, 120),
-            programName: String(window.programName || ''), status: String(window.status || 'unknown') })) })
+            programName: String(window.programName || ''), status: String(window.status || 'unknown') })) }
+      if (remote) item.observerFolder = path.join(this.home, 'observers', workspaceKey(item))
+      next.set(entry.id, item)
     }
     // Keep the Map object: already-created tools read the current registry.
     this.workspaces.clear()
@@ -40,12 +44,12 @@ export class AgentService {
     await this.registerWorkspaces(workspaces)
     const workspace = this.workspaces.get(workspaceId)
     if (!workspace) throw fail('请先打开有目录的工作区，再使用侧聊 Agent。')
-    if (workspace.machine && workspace.machine !== 'local') throw fail('这个 Agent 服务目前处理本机工作区；远程窗口仍可通过 HC 工具观察。')
-    if (!(await stat(workspace.folder).catch(() => null))?.isDirectory()) throw fail('工作区目录在本机不可用；远程项目需要在对应机器运行 Agent 服务。')
+    if (workspace.observerFolder) await mkdir(workspace.observerFolder, { recursive: true, mode: 0o700 })
+    else if (!(await stat(workspace.folder).catch(() => null))?.isDirectory()) throw fail('工作区目录在本机不可用。')
     if (typeof question !== 'string' || !question.trim() || question.length > 8000) throw fail('请提供有效的问题。')
     if (!config || typeof config.model !== 'string' || typeof config.endpoint !== 'string') throw fail('缺少侧聊模型配置。')
     if (typeof clientTurnId !== 'string' || !clientTurnId || clientTurnId.length > 160) throw fail('缺少有效的请求 ID。')
-    const key = workspaceKey(workspace), requestKey = `${key}:${clientTurnId}`
+    const key = workspaceKey(workspace), requestKey = `${key}:${clientTurnId}`, executionFolder = workspace.observerFolder || workspace.folder
     let previous = this.jobs.get(this.requests.get(requestKey))
     if (!previous) {
       try {
@@ -54,8 +58,8 @@ export class AgentService {
       } catch {}
     }
     if (previous && (!retry || !['error', 'cancelled'].includes(previous.status))) return this.snapshot(previous)
-    if (this.running.has(key) || [...this.running.values()].some(job => job.folder === workspace.folder)) throw fail('这个目录的 Agent 仍在处理问题，请等待、停止或使用独立工作树。', 409)
-    const job = { id: randomUUID(), workspaceId, key, folder: workspace.folder, status: 'running', text: '', thinking: '', tools: [],
+    if (this.running.has(key) || [...this.running.values()].some(job => job.folder === executionFolder)) throw fail('这个目录的 Agent 仍在处理问题，请等待、停止或使用独立工作树。', 409)
+    const job = { id: randomUUID(), workspaceId, key, folder: executionFolder, status: 'running', text: '', thinking: '', tools: [],
       statusMessage: '正在启动 Agent 与上下文扩展…', createdAt: Date.now(), cancelled: false }
     this.jobs.set(job.id, job); this.requests.set(requestKey, job.id); this.running.set(key, job)
     try {
@@ -89,7 +93,7 @@ export class AgentService {
   async execute(job, workspace, config, prompt) {
     try {
       const runtime = await this.getRuntime(workspace, config)
-      job.runtime = runtime; job.sessionId = runtime.sessionId; job.contextEngine = runtime.contextEngine
+      job.runtime = runtime; job.sessionId = runtime.sessionId; job.contextEngine = runtime.contextEngine; job.workspaceMode = runtime.workspaceMode
       if (job.cancelled) return
       job.statusMessage = 'Agent 正在处理…'
       const text = await runtime.run(prompt, { onEvent: event => this.event(job, event) })
@@ -134,7 +138,7 @@ export class AgentService {
   }
   snapshot(job) {
     return { id: job.id, workspaceId: job.workspaceId, sessionId: job.sessionId, status: job.status,
-      contextEngine: job.contextEngine, text: job.text, thinking: job.thinking, tools: job.tools.map(tool => ({ ...tool })),
+      contextEngine: job.contextEngine, workspaceMode: job.workspaceMode, text: job.text, thinking: job.thinking, tools: job.tools.map(tool => ({ ...tool })),
       statusMessage: job.statusMessage, error: job.error }
   }
   requestPath(key) { return path.join(this.home, 'requests', createHash('sha256').update(key).digest('hex') + '.json') }

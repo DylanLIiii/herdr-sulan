@@ -5,7 +5,7 @@ import path from 'node:path'
 
 export const DEFAULT_AGENT_PORT = 3426
 export const agentHome = () => path.resolve(process.env.SULAN_AGENT_HOME || path.join(process.env.XDG_DATA_HOME || path.join(homedir(), '.local/share'), 'herdr-sulan'))
-export const workspaceKey = workspace => createHash('sha256').update(`${workspace.id}\0${workspace.folder}`).digest('hex').slice(0, 24)
+export const workspaceKey = workspace => createHash('sha256').update(`${workspace.machine && workspace.machine !== 'local' ? workspace.machine + '\0' : ''}${workspace.id}\0${workspace.folder}`).digest('hex').slice(0, 24)
 export const connectionPath = () => path.join(agentHome(), 'connection.json')
 export async function privateJson(file, value) {
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 })

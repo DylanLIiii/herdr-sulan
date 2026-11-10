@@ -32,6 +32,8 @@ export function runtimeModelConfig(config) {
 
 export async function createRuntime({ home, workspace, workspaceRegistry, config, externalSessionsRoot, billionContext = true, fresh = false, hcExec }) {
   const modelConfig = runtimeModelConfig(config)
+  const cwd = workspace.observerFolder || workspace.folder
+  const observing = Boolean(workspace.observerFolder)
   const sessionDir = path.join(home, 'sessions', workspaceKey(workspace))
   const agentDir = path.join(home, 'pi')
   await mkdir(sessionDir, { recursive: true, mode: 0o700 })
@@ -55,7 +57,7 @@ export async function createRuntime({ home, workspace, workspaceRegistry, config
   // Runtime credentials are opaque values, not config expressions or shell commands.
   await modelRuntime.setRuntimeApiKey(provider, modelConfig.apiKey || 'sulan-anonymous')
   const extensionPaths = billionContext ? [path.join(path.dirname(require.resolve('billion-context/package.json')), 'dist/agent/pi-native.js')] : []
-  const loader = new DefaultResourceLoader({ cwd: workspace.folder, agentDir, settingsManager,
+  const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager,
     noExtensions: true, additionalExtensionPaths: extensionPaths,
     // Null is supported by this request hook, whereas provider config headers
     // are strings (and an empty string fails SDK client authentication checks).
@@ -64,28 +66,31 @@ export async function createRuntime({ home, workspace, workspaceRegistry, config
         headers.Authorization = null; headers['x-api-key'] = null; headers['api-key'] = null
       })
     }],
-    noSkills: true, noPromptTemplates: true, noThemes: true,
+    noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: observing,
     skillsOverride: () => ({ skills: [{ name: 'hc-project-context',
       description: 'Read progress across Herdr workspaces, HC windows and detailed Pi Agent history.',
       filePath: skillPath, baseDir: path.dirname(skillPath), disableModelInvocation: false,
       sourceInfo: createSyntheticSourceInfo(skillPath, { source: 'sdk' }) }], diagnostics: [] }),
-    appendSystemPrompt: [instructions],
+    appendSystemPrompt: [instructions, ...(observing ? [
+      `当前是远程工作区观察模式。目标机器为 ${workspace.machine}，远程目录为 ${workspace.folder}。只能使用 HC 与会话工具调查、解释和建议；没有文件、命令或编辑工具。当前本机目录只是私有会话存储，不是远程项目。完整历史仅覆盖本侧聊记录，其他远程 Agent 的证据来自 HC。若用户需要执行编码，说明当前仅观察，建议使用目标机器上的编码 Agent 执行。`,
+    ] : [])],
   })
   await loader.reload()
   const errors = loader.getExtensions().errors
   if (errors.length) throw new Error('侧聊上下文扩展加载失败：' + errors.map(error => error.error || error.message || '未知错误').join('; ').slice(0, 220))
   const model = modelRuntime.getModel(provider, modelConfig.model)
   if (!model) throw new Error('无法注册指定的侧聊模型。')
-  const manager = fresh ? SessionManager.create(workspace.folder, sessionDir) : SessionManager.continueRecent(workspace.folder, sessionDir)
-  const { session } = await createAgentSession({ cwd: workspace.folder, agentDir, modelRuntime,
+  const manager = fresh ? SessionManager.create(cwd, sessionDir) : SessionManager.continueRecent(cwd, sessionDir)
+  const hcTools = historyTools({ workspaceRegistry, sessionsRoot: path.join(home, 'sessions'), externalSessionsRoot, exec: hcExec })
+  const { session } = await createAgentSession({ cwd, agentDir, modelRuntime,
     model, thinkingLevel: modelConfig.anthropic ? 'off' : modelConfig.effort,
     sessionManager: manager, settingsManager, resourceLoader: loader,
-    tools: ['+grep', '+find', '+ls'],
-    customTools: historyTools({ workspaceRegistry, sessionsRoot: path.join(home, 'sessions'), externalSessionsRoot, exec: hcExec }),
+    tools: observing ? [...hcTools.map(tool => tool.name), 'compress', 'decompress', 'search_context', 'acp_status', 'acp_cache', 'acp_read_original_image'] : ['+grep', '+find', '+ls'],
+    customTools: hcTools,
   })
   try { await session.bindExtensions({}) } catch (error) { session.dispose(); throw error }
   let persistenceWarning = ''
-  return { session, sessionId: manager.getSessionId(), modelConfig,
+  return { session, sessionId: manager.getSessionId(), modelConfig, workspaceMode: observing ? 'observe' : 'code',
     get persistenceWarning() { return persistenceWarning },
     contextEngine: billionContext ? 'billion-context' : 'pi-native',
     async run(question, { onEvent = () => {} } = {}) {

@@ -21,10 +21,11 @@ export function historyTools({ workspaceRegistry, sessionsRoot, externalSessions
     if (!item) throw new Error('工作区不在当前应用提供的列表中。请先列出工作区。')
     return item
   }
+  const historyFolder = item => item.observerFolder || item.folder
   let cached = [], cachedAt = 0
   async function catalog() {
     if (Date.now() - cachedAt < 3000) return cached
-    const folders = new Set([...workspaceRegistry.values()].map(item => item.folder))
+    const folders = new Set([...workspaceRegistry.values()].map(historyFolder))
     const lists = await Promise.all([sessionsRoot, externalSessionsRoot].map(root => listSessions(root, folders)))
     cached = [...new Map(lists.flat().map(item => [item.id, item])).values()]
       .sort((a, b) => Number(new Date(b.modified)) - Number(new Date(a.modified)))
@@ -32,7 +33,7 @@ export function historyTools({ workspaceRegistry, sessionsRoot, externalSessions
     return cached
   }
   async function findSession(sessionId) {
-    const folders = new Set([...workspaceRegistry.values()].map(item => item.folder))
+    const folders = new Set([...workspaceRegistry.values()].map(historyFolder))
     const session = (await catalog()).find(item => item.id === sessionId && folders.has(item.cwd))
     if (!session) throw new Error('会话不在已注册工作区中。请先调用 agent_sessions。')
     return session
@@ -59,9 +60,9 @@ export function historyTools({ workspaceRegistry, sessionsRoot, externalSessions
     tool('agent_sessions', '查找 Agent 会话', '列出已登记工作区中的 Pi 持久会话，包括此侧聊；用于按需读取完整历史。',
       Type.Object({ workspaceId: string, limit }), async ({ workspaceId, limit = 20 }) => {
         const item = workspace(workspaceId)
-        return (await catalog()).filter(session => session.cwd === item.folder).slice(0, limit).map(session => ({
+        return (await catalog()).filter(session => session.cwd === historyFolder(item)).slice(0, limit).map(session => ({
           sessionId: session.id, workspaceId, firstMessage: String(session.firstMessage || '').slice(0, 200),
-          modified: session.modified, messageCount: session.messageCount, source: 'pi-session',
+          modified: session.modified, messageCount: session.messageCount, source: 'pi-session', scope: item.observerFolder ? 'side-chat-observer' : 'workspace',
         }))
       }),
     tool('agent_history', '回读完整会话', '按会话 ID 和原始条目游标读取 Pi 历史；返回来源与下一游标，压缩后仍可回读旧条目。',
@@ -87,7 +88,7 @@ export function historyTools({ workspaceRegistry, sessionsRoot, externalSessions
       Type.Object({ workspaceId: string, query: string, limit, sessionId: Type.Optional(string), beforeCursor: Type.Optional(Type.Integer({ minimum: 0 })) }),
       async ({ workspaceId, query, limit = 15, sessionId, beforeCursor }, signal) => {
         const item = workspace(workspaceId), matches = [], coverage = [], needle = query.toLowerCase()
-        const sessions = (await catalog()).filter(session => session.cwd === item.folder && (!sessionId || session.id === sessionId)).slice(0, 50)
+        const sessions = (await catalog()).filter(session => session.cwd === historyFolder(item) && (!sessionId || session.id === sessionId)).slice(0, 50)
         for (const session of sessions) {
           const end = Math.min(beforeCursor ?? Infinity, (await stat(session.path)).size)
           const start = Math.max(0, end - 4 * 1024 * 1024)

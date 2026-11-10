@@ -45,7 +45,7 @@ Sulan GPUI 侧栏
 | `agent_history_search` | 搜索限定范围并返回来源、游标与覆盖范围 |
 | `agent_history` | 按字节游标回读记录，并给出下一页位置 |
 
-HC 在终端 working、blocked 或 error 时可能只提供当前屏幕。完整历史适配器目前覆盖本机 **Pi JSONL**；Claude、OpenCode 等其他 Agent 当前只提供 HC 可见的终端资料。远程终端可通过 HC 地址观察，SDK 的工作目录与编码执行目前使用本机目录。
+HC 在终端 working、blocked 或 error 时可能只提供当前屏幕。完整历史适配器目前覆盖本机 **Pi JSONL**；Claude、OpenCode 等其他 Agent 当前只提供 HC 可见的终端资料。远程工作区直接进入只读观察模式：HC 地址带机器前缀，会话存储在服务的私有观察目录，仅开放 HC、历史和上下文工具。远程项目与本机同名的目录不会用于执行或读取历史；远程工作区的历史列表只包含其侧聊观察记录，原 Agent 的证据来自 HC。
 
 [历史读取器](../agent/session-history.js) 只读取有限文件头来建立目录，并流式读取所需记录。搜索默认覆盖最近 50 个相关会话、每个最近 4MB，可继续向前分页。结果保留截断信息；一个有限范围没有匹配，不代表整个历史没有相应事实。
 

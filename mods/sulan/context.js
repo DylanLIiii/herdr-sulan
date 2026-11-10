@@ -53,7 +53,9 @@ export function projectAgents(project, agentsList = [], terminalsList = []) {
       pane: pane.pane, focused: Boolean(pane.focused), turn: term?.turn ?? 0,
       subagents: children(pane.terminal) })
   }
-  return result.sort((a, b) => (STATUS_RANK[b.status] ?? 0) - (STATUS_RANK[a.status] ?? 0))
+  const qualify = address => address && project.machine && project.machine !== 'local' && !address.includes('/') ? `${project.machine}/${address}` : address
+  const scoped = agent => ({ ...agent, address: qualify(agent.address), parent: qualify(agent.parent), subagents: (agent.subagents || []).map(scoped) })
+  return result.sort((a, b) => (STATUS_RANK[b.status] ?? 0) - (STATUS_RANK[a.status] ?? 0)).map(scoped)
 }
 
 export function cleanScreenExcerpt(raw) {
@@ -65,7 +67,7 @@ export function cleanScreenExcerpt(raw) {
 
 export function contextSignature({ project, agents = [], excerpts = [] }) {
   if (!project) return ''
-  return JSON.stringify([project.id, project.folder,
+  return JSON.stringify([project.id, project.machine, project.folder,
     agents.map(a => [a.address, a.name, a.status, a.turn]), excerpts.map(e => [e.address, e.text])])
 }
 
@@ -112,6 +114,6 @@ export function buildInstantSummary(snapshot) {
     const prefix = a.status === 'working' ? '正在处理' : a.status === 'blocked' ? '终端请求关注' : '最近任务线索'
     return `- [${status}] ${prefix}：${short(a.name)}`
   })
-  return [`TLDR: ${headline}`, '## now', ...now.length ? now : ['- 暂无明确进展；更新后可根据终端片段整理重点。'],
-    '## next', '- 点击「更新」提炼工作重点、关键结论和下一步。'].join('\n')
+  return [`TLDR: ${headline}`, '## now', ...now.length ? now : ['- 暂无明确进展；出现新的 Agent 线索后会自动整理重点。'],
+    '## next', '- 正在自动监测项目资料；有新进展时会更新结论与下一步。'].join('\n')
 }

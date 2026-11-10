@@ -25,3 +25,12 @@ test('actual SDK clients preserve proxy paths and effort, support anonymous endp
   assert.equal(result.proxyPrefix, true)
   assert.equal(result.selectedEffort, true)
 })
+
+test('remote workspaces use real HC observation tools without exposing local coding tools', async () => {
+  const fixture = fileURLToPath(new URL('./fixtures/sdk-remote.js', import.meta.url))
+  const { stdout } = await promisify(execFile)(process.execPath, [fixture], { maxBuffer: 1024 * 1024, timeout: 60000 })
+  const result = JSON.parse(stdout.trim().split('\n').at(-1))
+  assert.equal(result.ok, true)
+  assert.equal(result.remoteObservation, true)
+  assert.equal(result.noCodingTools, true)
+})

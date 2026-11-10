@@ -38,6 +38,7 @@ export default class Sulan extends View {
     this.width = 396
     this.tab = 'summary'
     this.closed = false
+    this.viewWork = []
     this.projectKey = ''
     this.project = null
     this.snapshot = null
@@ -63,6 +64,11 @@ export default class Sulan extends View {
     this.loadingContext = false
     this.summarizing = false
     this.queuedAi = false
+    this.autoUpdate = p.autoUpdate !== false
+    this.summarySignature = ''
+    this.summaryTarget = ''
+    this.nextAutoAt = 0
+    this.autoFailures = 0
     this.paused = false
     this.note = ''
     this.isError = false
@@ -112,6 +118,7 @@ export default class Sulan extends View {
         if (!this.closed && this.currentSpaceKey() !== this.projectKey) {
           this.syncProject(); this.refresh(cx); cx.notify()
         }
+        if (!this.closed) for (const work of this.viewWork.splice(0)) work(cx)
       })
       cx.timer.every(500, cx => {
         if (this.closed) return
@@ -121,7 +128,7 @@ export default class Sulan extends View {
         } else this.pollAgent(cx)
       })
       cx.timer.every(10000, cx => {
-        if (!this.closed && !this.paused && this.visible() && !this.busy()) this.refresh(cx, { silent: true })
+        if (!this.closed && this.visible() && !this.busy()) this.refresh(cx, { silent: true })
       })
     }
     cx.spawn(async cx => {
@@ -149,7 +156,7 @@ export default class Sulan extends View {
   currentSpaceKey() {
     if (this.mode === 'demo') return 'demo:herdr-sulan'
     const project = activeProject(spaces(), panes(), focused())
-    return project ? `live:${project.id}:${project.folder || project.name}` : 'live:none'
+    return project ? `live:${project.machine && project.machine !== 'local' ? project.machine + ':' : ''}${project.id}:${project.folder || project.name}` : 'live:none'
   }
   syncProject() {
     const key = this.currentSpaceKey()
@@ -158,6 +165,7 @@ export default class Sulan extends View {
     this.projectKey = key
     this.generation++; this.chatEpoch++
     this.loadingContext = false; this.summarizing = false; this.queuedAi = false; this.paused = false
+    this.autoFailures = 0; this.nextAutoAt = Math.min(this.nextAutoAt, Date.now() + 30000)
     this.chatRunning = false; this.chatStatus = ''; this.chatError = false
     this.agentJob = null; this.agentStarting = null; this.agentResumePending = null; this.chatStopping = false; this.chatResetting = false
     this.expandedTools.clear()
@@ -165,9 +173,12 @@ export default class Sulan extends View {
     this.expandedThinking.clear()
     const demo = this.mode === 'demo' ? DEMO_PROJECTS[0] : null
     this.project = demo?.project || activeProject(spaces(), panes(), focused())
-    const cached = demo || load(key) || {}
+    const legacyKey = this.project ? `live:${this.project.id}:${this.project.folder || this.project.name}` : key
+    const cached = demo || load(key) || (key !== legacyKey ? load(legacyKey) : null) || {}
     this.snapshot = demo ? { project: demo.project, agents: demo.agents, contextText: demo.summary, capturedAt: Date.now() } : null
     this.setSummary(cached.summary || '', demo ? 'demo' : cached.summarySource || '', cached.updatedAt || 0)
+    this.summarySignature = cached.summarySignature || ''
+    this.summaryTarget = cached.summaryTarget || ''
     this.turns = cleanTurns(cached.turns)
     if (cached.agentJob?.id && this.turns.some(turn => turn.id === cached.agentJob.turnId)) {
       this.agentJob = { ...cached.agentJob, key }; this.chatRunning = true
@@ -179,6 +190,7 @@ export default class Sulan extends View {
   persistCurrentSpace() {
     if (!this.projectKey || this.projectKey.startsWith('demo:')) return
     save(this.projectKey, { summary: this.summary, summarySource: this.summarySource, updatedAt: this.updatedAt,
+      summarySignature: this.summarySignature, summaryTarget: this.summaryTarget,
       turns: this.turns, draft: this.draft,
       agentJob: this.agentJob ? { id: this.agentJob.id, turnId: this.agentJob.turnId, connection: this.agentJob.connection } : null,
       agentPending: this.agentStarting ? { turnId: this.agentStarting.turnId, connection: this.agentStarting.connection } : this.agentResumePending })
@@ -267,7 +279,9 @@ export default class Sulan extends View {
       config = validateModelSettings({ ...values, chatEffort: this.settingsEffort })
     } catch (error) { this.settingsError = error.message; cx.notify(); return false }
     if (!save('prefs', config)) { this.settingsError = '无法保存到 Herdr 本地配置，请稍后重试。'; cx.notify(); return false }
+    const summaryChanged = config.summaryModel !== this.summaryModel || config.endpoint !== this.endpoint || config.apiKey !== this.apiKey
     Object.assign(this, config)
+    if (summaryChanged) { this.summaryTarget = ''; this.nextAutoAt = 0; this.autoFailures = 0 }
     this.settingsNotice = '模型设置已保存，下一次请求生效。'
     const version = ++this.settingsNoticeVersion
     this.closeSettings(cx)
@@ -290,6 +304,17 @@ export default class Sulan extends View {
     return gatherProjectSnapshot({ spacesList: spaces(), panesList: panes(), focusedInfo: focused(),
       agentsList: agents(), terminalsList: terminals(), hcFn: hc })
   }
+  inView(callback) {
+    // Native promises may resume while another Mod owns the ambient scope.
+    // Start follow-up IO from this View's timer, which restores its owner.
+    return new Promise((resolve, reject) => this.viewWork.push(cx => cx.spawn(async cx => {
+      try { resolve(await callback(cx)) } catch (error) { reject(error) }
+    })))
+  }
+  deferAutoSummary() {
+    this.autoFailures++
+    this.nextAutoAt = Date.now() + Math.min(300000, 30000 * 2 ** Math.min(this.autoFailures - 1, 4))
+  }
   refresh(cx, { forceAi = false, rebuild = false, silent = false } = {}) {
     if (this.closed || this.role === 'tabs') return
     this.syncProject()
@@ -299,38 +324,51 @@ export default class Sulan extends View {
     const previousSummary = rebuild ? '' : this.summary
     const displayedSummary = this.summary, previousNote = this.note
     const modelConfig = { endpoint: this.endpoint, apiKey: this.apiKey, model: this.summaryModel }
+    const target = JSON.stringify([modelConfig.endpoint, modelConfig.model])
     this.loadingContext = true; this.paused = false; this.isError = false
     if (!silent) this.note = ''
     if (!silent) cx.notify()
-    // A deadline releases the UI and ignores a late answer. Native fetch is
-    // not cancellable; pause automatic collection after a deadline expires.
+    // The native request cannot be cancelled. Ignore late results and back off
+    // before retrying, while continuing to observe fresh project evidence.
     cx.timer.after(60000, cx => {
       if (this.closed || generation !== this.generation || !this.busy()) return
       this.generation++; this.loadingContext = false; this.summarizing = false; this.queuedAi = false; this.paused = true
-      this.note = '更新耗时较长，已保留上一版重点。稍后可以手动重试。'; this.isError = true; cx.notify()
+      this.deferAutoSummary()
+      this.note = this.autoUpdate ? '更新耗时较长，已保留上一版；稍后会自动重试。' : '更新耗时较长，已保留上一版重点。稍后可以手动重试。'
+      this.isError = true; cx.notify()
     })
     cx.spawn(async cx => {
       try {
         const snapshot = await this.contextRequest()
-        if (this.closed || generation !== this.generation || key !== this.projectKey) return
-        const changed = snapshot?.signature !== this.snapshot?.signature
-        this.snapshot = snapshot
-        if (!snapshot) { this.note = '先打开一个项目，再整理工作重点。'; return }
-        if (!this.summary || (this.summarySource === 'instant' && changed)) this.setSummary(buildInstantSummary(snapshot), 'instant')
-        if (forceAi) {
-          this.summarizing = true; cx.notify()
-          const reply = await completeModel({ ...modelConfig,
-            system: summarySystemPrompt(), prompt: summaryUserPrompt({ previousSummary, contextText: snapshot.contextText }), maxTokens: 2000 })
+        await this.inView(async cx => {
           if (this.closed || generation !== this.generation || key !== this.projectKey) return
-          const answer = splitReply(reply).answer.trim()
-          if (!parseSummary(answer)) throw new Error('模型没有返回可用的速览')
-          this.setSummary(answer.slice(0, 10000), 'ai')
-          this.note = ''
-        } else if (changed && this.summarySource === 'ai') this.note = '任务有新进展；更新后可重新提炼重点。'
-        this.persistCurrentSpace()
+          const changed = snapshot?.signature !== this.snapshot?.signature
+          this.snapshot = snapshot
+          if (!snapshot) { this.note = '先打开一个项目，再整理工作重点。'; return }
+          if (!this.summary || (this.summarySource === 'instant' && changed)) this.setSummary(buildInstantSummary(snapshot), 'instant')
+          const meaningful = snapshot.agents?.some(agent => !agent.isShell) || snapshot.excerpts?.length
+          const pending = this.summarySource !== 'ai' || this.summarySignature !== snapshot.signature || this.summaryTarget !== target
+          const automatic = this.autoUpdate && this.page === 'content' && this.visible() && meaningful && pending && Date.now() >= this.nextAutoAt
+          if (forceAi || automatic) {
+            this.nextAutoAt = Date.now() + 30000
+            this.summarizing = true; cx.notify()
+            const reply = await completeModel({ ...modelConfig,
+              system: summarySystemPrompt(), prompt: summaryUserPrompt({ previousSummary, contextText: snapshot.contextText }), maxTokens: 2000 })
+            if (this.closed || generation !== this.generation || key !== this.projectKey) return
+            const answer = splitReply(reply).answer.trim()
+            if (!parseSummary(answer)) throw new Error('模型没有返回可用的速览')
+            this.setSummary(answer.slice(0, 10000), 'ai')
+            this.summarySignature = snapshot.signature; this.summaryTarget = target
+            this.autoFailures = 0; this.nextAutoAt = Date.now() + 30000
+            this.note = ''
+          } else if (pending && this.summarySource === 'ai' && this.autoUpdate) this.note = '检测到新资料，稍后会自动更新。'
+          else if (changed && this.summarySource === 'ai') this.note = '任务有新进展；更新后可重新提炼重点。'
+          this.persistCurrentSpace()
+        })
       } catch (error) {
         if (generation !== this.generation || key !== this.projectKey || this.closed) return
-        this.note = '暂时无法更新，已保留现有内容。' + String(error?.message || '').slice(0, 100)
+        this.deferAutoSummary()
+        this.note = '暂时无法更新，已保留现有内容。' + (this.autoUpdate ? '稍后自动重试。' : '') + String(error?.message || '').slice(0, 100)
         this.isError = true
       } finally {
         if (!this.closed && generation === this.generation && key === this.projectKey) {
@@ -560,7 +598,7 @@ export default class Sulan extends View {
       .child(action('sulan-tab-summary', '速览', t, cx => this.selectTab('summary', cx), { active: this.tab === 'summary' }))
       .child(action('sulan-tab-chat', '侧聊', t, cx => this.selectTab('chat', cx), { active: this.tab === 'chat' }))
       .child(div().flex_1())
-      .child(div().text_size(11).text_color(t.muted).child(this.summarySource === 'instant' ? '任务线索' : clock(this.updatedAt)))
+      .child(div().text_size(11).text_color(t.muted).child(this.summarySource === 'instant' ? (this.autoUpdate ? '自动监测' : '任务线索') : `${this.mode === 'live' && this.autoUpdate ? '自动 · ' : ''}${clock(this.updatedAt)}`))
     const root = v_flex().id('sulan-root').size_full().min_w(0).min_h(0).rounded(10).overflow_hidden()
       .bg(t.background).border_1().border_color(t.border).text_color(t.foreground).font_normal().text_size(13)
       .track_focus(this.focus).on_key_down((event, cx) => this.handleKey(event, cx))

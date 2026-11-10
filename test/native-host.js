@@ -78,7 +78,7 @@ export async function createHost(options = {}) {
     nextCommand: () => new Promise(() => {}), watchFolder: () => new Promise(() => {}),
     exec: async () => { metrics.exec++; return { code: 0, stdout: '', stderr: '' } },
     hc: async () => { metrics.hc++; return { code: 0, stdout: '', stderr: '' } },
-    console, Date, Map, Set, JSON,
+    console, Date: options.now ? class extends Date { static now() { return options.now() } } : Date, Map, Set, JSON,
   }
   const sandbox = vm.createContext(context)
   for (const path of ['view.js', 'settings-view.js', 'workspace.js']) {
@@ -88,6 +88,14 @@ export async function createHost(options = {}) {
   }
   vm.runInContext(source, sandbox)
   const mod = new context.Mod()
-  mod.init({ mode: 'demo', agentToken: 'fixture-agent-token', ...options.props }, cx)
+  mod.init({ mode: 'demo', autoUpdate: false, agentToken: 'fixture-agent-token', ...options.props }, cx)
+  if (!options.manualViewTicks) mod.viewWork = new Proxy(mod.viewWork, { get(target, key, receiver) {
+    if (key !== 'push') return Reflect.get(target, key, receiver)
+    return (...work) => {
+      const length = target.push(...work)
+      queueMicrotask(() => timers.find(timer => timer.kind === 'every' && timer.ms === 250)?.callback(cx))
+      return length
+    }
+  } })
   return { mod, cx, metrics, timers, input, commands, storage, agentRequests }
 }

@@ -28,7 +28,7 @@ export function summaryView(view, t) {
   const brief = view.brief
   if (!brief.headline) {
     content.child(div().text_size(17).font_semibold().child('回到项目，先抓重点'))
-      .child(div().text_size(13).line_height('21px').text_color(t.muted).child('更新速览，了解当前结论、工作进展，以及接下来最值得做的一件事。'))
+      .child(div().text_size(13).line_height('21px').text_color(t.muted).child('资料变化后会自动整理当前结论、工作进展，以及接下来最值得做的一件事。'))
       .child(action('summary-first-update', '整理项目重点', t, cx => view.refresh(cx, { forceAi: true }), { primary: true, disabled: view.busy() }))
   } else {
     content.child(div().text_size(18).line_height('27px').font_semibold().child(brief.headline))
@@ -81,6 +81,8 @@ function exchange(view, turn, index, t) {
 
 export function chatView(view, t) {
   const content = v_flex().min_w(0).gap(18)
+  if (view.project?.machine && view.project.machine !== 'local') content.child(div().text_size(12).line_height('19px').text_color(t.muted)
+    .child('远程观察模式：可通过 HC 读取窗口资料；不会在本机执行远程项目的编码操作。'))
   if (!view.turns.length) {
     content.child(div().text_size(18).font_semibold().child('围绕重点，继续追问'))
       .child(div().text_size(13).line_height('21px').text_color(t.muted).child('项目 Agent 可以按需读取窗口与会话历史，先给结论，再解释证据。'))
