@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, writeFile, stat } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, writeFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { startAgentServer } from '../agent/server.js'
@@ -12,7 +12,7 @@ import { installSulan } from '../scripts/install-layout.js'
 const config = { endpoint: 'http://127.0.0.1:3425/v1/messages', model: 'fixture/model', apiKey: 'example-model-key' }
 const parsed = result => JSON.parse(result.content[0].text)
 async function fixture() {
-  const root = await mkdtemp(path.join(tmpdir(), 'sulan-agent-test-'))
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), 'sulan-agent-test-')))
   const folder = path.join(root, 'project'); await mkdir(folder)
   const workspace = { id: 'project', name: 'Project', folder, windows: [{ address: 't7', status: 'working' }] }
   return { root, folder, workspace, home: path.join(root, 'agent'), external: path.join(root, 'external') }

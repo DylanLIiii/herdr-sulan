@@ -14,7 +14,7 @@ import { modelSettingsView } from './settings-view.js'
 import { fetchModels } from './models.js'
 import { agentWorkspaces, validateAgentConnection, startAgentTurn, readAgentJob, stopAgentTurn, resetAgentSession } from './agent-client.js'
 import { DEMO_PROJECTS } from './demo.js'
-import { action, summaryView, chatView } from './view.js'
+import { action, segmentTab, segmentedTabs, statusChip, summaryView, chatView } from './view.js'
 import { findNode, renderWorkspaceTabs } from './workspace.js'
 
 const PREFIX = 'herdr.sulan.v1:'
@@ -75,6 +75,8 @@ export default class Sulan extends View {
     this.generation = 0
     this.chatEpoch = 0
     this.chatRunning = false
+    this.chatStartedAt = 0
+    this.lastChatElapsedSec = 0
     this.chatStatus = ''
     this.chatError = false
     this.agentJob = null
@@ -125,7 +127,16 @@ export default class Sulan extends View {
         if (this.agentResumePending && !this.chatRunning) {
           const pending = this.agentResumePending; this.agentResumePending = null
           this.runChatTurn(cx, { resume: true, connection: pending.connection })
-        } else this.pollAgent(cx)
+        } else {
+          this.pollAgent(cx)
+          if (this.chatRunning && this.tab === 'chat' && this.page === 'content' && this.chatStartedAt > 0) {
+            const elapsedSec = Math.floor((Date.now() - this.chatStartedAt) / 1000)
+            if (elapsedSec !== this.lastChatElapsedSec) {
+              this.lastChatElapsedSec = elapsedSec
+              cx.notify()
+            }
+          }
+        }
       })
       cx.timer.every(10000, cx => {
         if (!this.closed && this.visible() && !this.busy()) this.refresh(cx, { silent: true })
@@ -420,6 +431,9 @@ export default class Sulan extends View {
     const retry = !resume && Boolean(turn.incomplete || this.chatError)
     const epoch = ++this.chatEpoch, key = this.projectKey
     turn.id ||= `${Date.now().toString(36)}-${this.clientInstance}-${epoch}`
+    turn.startedAt ||= Date.now()
+    this.chatStartedAt = turn.startedAt
+    this.lastChatElapsedSec = 0
     this.chatRunning = true; this.chatError = false; this.chatStatus = '正在连接 Pi Agent…'
     if (this.agentJob?.turnId === turn.id) { this.pollAgent(cx); cx.notify(); return }
     const starting = { turnId: turn.id, connection, cancelled: false }
@@ -480,7 +494,10 @@ export default class Sulan extends View {
     this.chatStatus = data.error || data.statusMessage || ''
     this.chatError = data.status === 'error'
     this.chatRunning = data.status === 'running'
-    if (!this.chatRunning) { this.agentJob = null; this.chatStopping = false }
+    if (!this.chatRunning) {
+      if (turn.startedAt || this.chatStartedAt) turn.durationMs = Math.max(0, Date.now() - (turn.startedAt || this.chatStartedAt))
+      this.agentJob = null; this.chatStopping = false; this.chatStartedAt = 0
+    }
     if (!this.chatRunning || Date.now() - (job.savedAt || 0) >= 1000) { job.savedAt = Date.now(); this.persistCurrentSpace() }
     cx.notify()
   }
@@ -586,31 +603,51 @@ export default class Sulan extends View {
     const t = theme()
     if (this.role === 'tabs') return renderWorkspaceTabs(this, t)
     if (this.page === 'settings') return modelSettingsView(this, t)
-    const header = h_flex().h(45).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
-      .child(svg('mods/sulan/sulan.svg').size(15).text_color(t.accent))
-      .child(div().text_size(13).font_semibold().child(this.project?.name || '项目速览'))
-      .child(div().flex_1())
-      .when(this.mode === 'demo', el => el.child(div().text_size(11).text_color(t.working).child('演示')))
-      .child(action('sulan-update', this.busy() ? '整理中…' : '更新', t, cx => this.refresh(cx, { forceAi: true }), { disabled: this.busy() }))
+    const header = h_flex().id('sulan-header').h(46).flex_none().px(14).gap(8).items_center()
+      .bg(t.surface).border_b(1).border_color(t.border)
+      .child(div().size(24).rounded(6).bg(t.raised).border_1().border_color(t.border).flex().items_center().justify_center()
+        .child(svg('mods/sulan/sulan.svg').size(14).text_color(t.accent)))
+      .child(div().flex_1().min_w(0).text_size(13).font_semibold().truncate().child(this.project?.name || '项目速览'))
+      .when(this.mode === 'demo', el => el.child(div().px(6).py(1).rounded(4).bg(t.raised).border_1().border_color(t.border).text_size(11).text_color(t.working).child('演示')))
+      .child(action('sulan-update', this.busy() ? '整理中…' : '更新', t, cx => this.refresh(cx, { forceAi: true }), { primary: true, disabled: this.busy() }))
       .child(action('sulan-settings', '设置', t, cx => this.openSettings(cx)))
       .child(action('sulan-menu', '更多', t, cx => { this.menuOpen = !this.menuOpen; cx.notify() }, { active: this.menuOpen }))
-    const navigation = h_flex().h(40).flex_none().px(14).gap(4).items_center()
-      .child(action('sulan-tab-summary', '速览', t, cx => this.selectTab('summary', cx), { active: this.tab === 'summary' }))
-      .child(action('sulan-tab-chat', '侧聊', t, cx => this.selectTab('chat', cx), { active: this.tab === 'chat' }))
-      .child(div().flex_1())
-      .child(div().text_size(11).text_color(t.muted).child(this.summarySource === 'instant' ? (this.autoUpdate ? '自动监测' : '任务线索') : `${this.mode === 'live' && this.autoUpdate ? '自动 · ' : ''}${clock(this.updatedAt)}`))
-    const root = v_flex().id('sulan-root').size_full().min_w(0).min_h(0).rounded(10).overflow_hidden()
+    const statusText = this.busy()
+      ? '整理中…'
+      : this.paused || this.autoFailures > 0
+        ? '退避重试'
+        : this.summarySource === 'instant'
+          ? (this.autoUpdate ? '自动监测' : '任务线索')
+          : `${this.mode === 'live' && this.autoUpdate ? '自动 · ' : ''}${clock(this.updatedAt)}`
+    const navigation = h_flex().id('sulan-navigation').h(42).flex_none().px(14).gap(8).items_center().justify_between()
+      .bg(t.background).border_b(1).border_color(t.border)
+      .child(segmentedTabs('sulan-segmented-tabs', t, [
+        segmentTab('sulan-tab-summary', '速览', t, cx => this.selectTab('summary', cx), { active: this.tab === 'summary' }),
+        segmentTab('sulan-tab-chat', '侧聊', t, cx => this.selectTab('chat', cx), { active: this.tab === 'chat', busy: this.chatRunning }),
+      ]))
+      .child(statusChip(this, statusText, t))
+    const root = v_flex().id('sulan-root').size_full().min_w(0).min_h(0).relative().rounded(10).overflow_hidden()
       .bg(t.background).border_1().border_color(t.border).text_color(t.foreground).font_normal().text_size(13)
       .track_focus(this.focus).on_key_down((event, cx) => this.handleKey(event, cx))
       .child(header).child(navigation)
-    if (this.settingsNotice) root.child(div().flex_none().px(18).py(6).text_size(12).text_color(t.done).child(this.settingsNotice))
-    if (this.menuOpen) root.child(h_flex().px(14).pb(8).gap(6).flex_none()
-      .child(action('sulan-rebuild', '重新整理', t, cx => { this.menuOpen = false; this.rebuild(cx) }, { disabled: this.busy() }))
-      .child(action('sulan-demo', this.mode === 'demo' ? '查看实时项目' : '预览示例', t, cx => {
-        this.menuOpen = false; this.switchMode(this.mode === 'demo' ? 'live' : 'demo', cx)
-      })))
+    if (this.settingsNotice) {
+      root.child(h_flex().flex_none().px(14).py(6).gap(6).items_center().bg(t.surface).border_b(1).border_color(t.border)
+        .child(div().size(6).rounded_full().bg(t.done))
+        .child(div().text_size(12).text_color(t.done).child(this.settingsNotice)))
+    }
     // Critical path: only one document is constructed for this frame. The
     // inactive tab does no Markdown parsing, diagram layout or native work.
-    return root.child(this.tab === 'chat' ? this.renderChatContent(t) : this.renderSummaryContent(t))
+    root.child(this.tab === 'chat' ? this.renderChatContent(t) : this.renderSummaryContent(t))
+    if (this.menuOpen) {
+      root.child(v_flex().id('sulan-more-popover').absolute().top(44).right(12).w(176).p(6).gap(4).rounded(9)
+        .bg(t.popover || t.raised).border_1().border_color(t.border).shadow_md()
+        .on_mouse_down('left', (_e, cx) => cx.stop_propagation())
+        .on_mouse_down_out((_e, cx) => { this.menuOpen = false; cx.notify() })
+        .child(action('sulan-rebuild', '重新整理', t, cx => { this.menuOpen = false; this.rebuild(cx) }, { disabled: this.busy() }).w_full().justify_start())
+        .child(action('sulan-demo', this.mode === 'demo' ? '查看实时项目' : '预览示例', t, cx => {
+          this.menuOpen = false; this.switchMode(this.mode === 'demo' ? 'live' : 'demo', cx)
+        }).w_full().justify_start()))
+    }
+    return root
   }
 }

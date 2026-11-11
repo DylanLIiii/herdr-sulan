@@ -141,3 +141,40 @@ test('project identity stays stable when sidebar focus moves between terminal fo
   assert.equal(activeProject(spacesList, panesList, { pane: 'a' }).folder, '/project')
   assert.equal(activeProject(spacesList, panesList, { pane: 'b' }).folder, '/project')
 })
+
+test('segmented tabs, status chip, floating More popover, attention alert card, starter cards and two-row composer work cohesively', async () => {
+  const { mod, cx } = await createHost({
+    spaces: [{ id: 's', name: 'Project', machine: 'remote-box', active: true, folder: '/project', tabs: [] }],
+  })
+  let root = mod.render(cx)
+  let nodes = walk(root)
+  assert.ok(nodes.some(n => n.styles.id?.[0] === 'sulan-segmented-tabs'), 'segmented tabs container renders')
+  assert.ok(nodes.some(n => n.styles.id?.[0] === 'sulan-status-chip'), 'status chip renders in navigation bar')
+  assert.ok(nodes.some(n => n.styles.id?.[0] === 'brief-attention-card'), 'attention alert card renders with emphasis')
+  assert.equal(nodes.filter(n => n.kind === 'markdown' && n.id === 'brief-document').length, 1, 'brief body stays a single TextView.markdown')
+
+  const menuBtn = nodes.find(n => n.id === 'sulan-menu')
+  menuBtn.handlers.on_click({}, cx)
+  assert.equal(mod.menuOpen, true)
+  root = mod.render(cx)
+  nodes = walk(root)
+  const popover = nodes.find(n => n.styles.id?.[0] === 'sulan-more-popover')
+  assert.ok(popover, 'More menu renders as a floating popover')
+  assert.ok(popover.styles.absolute, 'More popover uses absolute positioning so it does not push content')
+
+  mod.turns = []
+  mod.selectTab('chat', cx)
+  nodes = walk(mod.render(cx))
+  assert.ok(nodes.some(n => n.styles.id?.[0] === 'chat-starter-cards'), 'empty chat renders Starter Cards')
+  assert.equal(nodes.filter(n => n.kind === 'button' && String(n.id).startsWith('chat-suggestion-')).length, 3)
+  assert.ok(nodes.some(n => n.styles.id?.[0] === 'chat-composer-card'), 'two-row integrated composer card renders')
+  assert.ok(nodes.some(n => n.styles.id?.[0] === 'chat-kbd-badge'), 'shortcut kbd badge renders inside composer')
+  assert.ok(nodes.some(n => n.styles.id?.[0] === 'chat-status-strip'), 'bottom status strip renders')
+  assert.ok(nodes.some(n => n.styles.id?.[0] === 'chat-mode-pill'), 'status strip includes mode pill')
+
+  const modelPill = nodes.find(n => n.id === 'chat-settings')
+  assert.ok(modelPill, 'embedded model+effort pill renders inside composer')
+  modelPill.handlers.on_click({}, cx)
+  assert.equal(mod.page, 'settings', 'clicking composer model pill opens settings page directly')
+  mod.close()
+})

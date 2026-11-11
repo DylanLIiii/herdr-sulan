@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { startAgentServer } from '../agent/server.js'
@@ -24,7 +24,7 @@ test('remote windows are qualified before both summary collection and Agent obse
 })
 
 test('remote questions use a private observer directory even when the remote path exists on this host', async t => {
-  const root = await mkdtemp(path.join(tmpdir(), 'sulan-remote-')), folder = path.join(root, 'local-lookalike')
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), 'sulan-remote-'))), folder = path.join(root, 'local-lookalike')
   await mkdir(folder)
   let received
   const server = await startAgentServer({ home: path.join(root, 'agent'), port: 0, billionContext: false,
